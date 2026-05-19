@@ -2,7 +2,7 @@
 
 ## Project summary
 
-This project is a real-time AI telephony voice agent backend for phone calls.
+This project is a real-time AI telephony voice agent backend for phone calls and calls are outbound for now.
 
 The main pipeline is:
 

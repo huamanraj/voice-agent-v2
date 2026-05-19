@@ -60,7 +60,9 @@ def test_vobiz_start_and_media_decode_to_audio_frame() -> None:
         adapter = VobizTelephony(websocket)
         payload = silence_bytes("mulaw_8k", 20)
 
+        await websocket.feed_json({"event": "connected", "protocol": "Call"})
         await websocket.feed_json(start_packet())
+        await websocket.feed_json({"event": "dtmf", "dtmf": {"digit": "1"}})
         await websocket.feed_json(
             {
                 "sequenceNumber": 2,
@@ -79,6 +81,7 @@ def test_vobiz_start_and_media_decode_to_audio_frame() -> None:
         frames = [frame async for frame in adapter.receive_audio()]
 
         assert len(frames) == 1
+        assert adapter.errors == []
         assert frames[0].call_id == "call-123"
         assert frames[0].meta["stream_id"] == "stream-123"
         assert frames[0].codec == "mulaw_8k"

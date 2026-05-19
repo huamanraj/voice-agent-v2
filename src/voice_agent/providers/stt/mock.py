@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 
 from voice_agent.contracts.audio import AudioFrame
 from voice_agent.contracts.capabilities import STTCapabilities
-from voice_agent.contracts.events import TranscriptEvent
+from voice_agent.contracts.events import SpeechStart, SpeechStop, TranscriptEvent
 
 
 class MockSTT:
@@ -24,6 +24,7 @@ class MockSTT:
         self.language_hint: str | None = None
         self.audio_frames: list[AudioFrame] = []
         self._transcripts: asyncio.Queue[TranscriptEvent | None] = asyncio.Queue()
+        self._speech_events: asyncio.Queue[SpeechStart | SpeechStop | None] = asyncio.Queue()
 
     async def start(self, call_id: str, language_hint: str | None = None) -> None:
         self.call_id = call_id
@@ -56,8 +57,16 @@ class MockSTT:
                 break
             yield transcript
 
+    async def speech_events(self) -> AsyncIterator[SpeechStart | SpeechStop]:
+        while True:
+            event = await self._speech_events.get()
+            if event is None:
+                break
+            yield event
+
     async def update_language_hint(self, language: str) -> None:
         self.language_hint = language
 
     async def stop(self) -> None:
         await self._transcripts.put(None)
+        await self._speech_events.put(None)

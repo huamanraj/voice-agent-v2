@@ -126,13 +126,14 @@ class SessionOrchestrator:
         self.state = CallState.STARTING
         await self._save_live_state()
         await self.providers.telephony.start()
-        await self.providers.stt.start(self.call_id)
+        await self.providers.stt.start(self.call_id, language_hint=self.settings.deepgram_language)
         await self.providers.tts.start(self.call_id, voice="mock-voice", language="en-IN")
 
         self.tasks = {
             "receive_audio_loop": self._create_task("receive_audio_loop", self._receive_audio_loop),
             "stt_sender_loop": self._create_task("stt_sender_loop", self._stt_sender_loop),
             "stt_receiver_loop": self._create_task("stt_receiver_loop", self._stt_receiver_loop),
+            "stt_speech_loop": self._create_task("stt_speech_loop", self._stt_speech_loop),
             "vad_processor_loop": self._create_task(
                 "vad_processor_loop",
                 lambda: self._drain_loop(self.queues.vad_audio),
@@ -260,6 +261,32 @@ class SessionOrchestrator:
         )
         await put_packet(
             self.queues.interruption_event,
+            AgentPacket.eos_packet(self.call_id),
+            BackpressurePolicy.DROP_OLDEST,
+        )
+
+    async def _stt_speech_loop(self) -> None:
+        async for speech_event in self.providers.stt.speech_events():
+            await put_packet(
+                self.queues.speech_event,
+                self._packet("speech_event", {"event": speech_event}),
+                BackpressurePolicy.DROP_OLDEST,
+            )
+            await put_packet(
+                self.queues.interruption_event,
+                self._packet("speech_event", {"event": speech_event}),
+                BackpressurePolicy.DROP_OLDEST,
+            )
+            if isinstance(speech_event, SpeechStart):
+                self.turn_manager.handle_speech_start(speech_event)
+            else:
+                self.turn_manager.handle_speech_stop(speech_event)
+                turn = self.turn_manager.emit_turn(now_ms())
+                if turn is not None:
+                    await self._emit_user_turn(turn)
+
+        await put_packet(
+            self.queues.speech_event,
             AgentPacket.eos_packet(self.call_id),
             BackpressurePolicy.DROP_OLDEST,
         )

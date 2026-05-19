@@ -186,10 +186,14 @@ class VobizTelephony:
 
     async def _handle_packet(self, packet: dict[str, Any]) -> None:
         event_name = str(packet.get("event", ""))
+        if event_name == "connected":
+            return
         if event_name == "start":
             await self._handle_start(packet)
         elif event_name == "media":
             await self._handle_media(packet)
+        elif event_name == "dtmf":
+            return
         elif event_name == "playedStream":
             await self._handle_played_stream(packet)
         elif event_name == "clearedAudio":

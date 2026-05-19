@@ -47,7 +47,13 @@ class Settings(BaseSettings):
     final_store_provider: ProviderName = "memory"
     logger_provider: ProviderName = "file"
 
+    vobiz_api_base_url: str = "https://api.vobiz.ai"
+    vobiz_auth_id: str | None = None
     vobiz_auth_token: str | None = None
+    vobiz_from_number: str | None = None
+    vobiz_answer_url: str | None = None
+    vobiz_answer_method: str = "POST"
+    vobiz_stream_ws_path: str = "/ws/vobiz"
     deepgram_api_key: str | None = None
     sarvam_api_key: str | None = None
     cartesia_api_key: str | None = None
@@ -108,15 +114,22 @@ class Settings(BaseSettings):
     llm_first_token_timeout_ms: int = 3000
     llm_total_timeout_ms: int = 15000
 
+    deepgram_ws_url: str = "wss://api.deepgram.com/v1/listen"
     deepgram_model: str = "nova-3"
     deepgram_language: str = "multi"
     deepgram_endpointing_ms: int = 100
     deepgram_utterance_end_ms: int = 1000
     deepgram_keepalive_seconds: int = 3
 
+    cartesia_ws_url: str = "wss://api.cartesia.ai/tts/websocket"
+    cartesia_version: str = "2026-03-01"
+    cartesia_voice_id: str | None = None
+    cartesia_language: str = "en"
     cartesia_model: str = "sonic-3.5"
     cartesia_output_encoding: str = "pcm_mulaw"
     cartesia_sample_rate: int = 8000
+    cartesia_max_buffer_delay_ms: int = 100
+    cartesia_add_timestamps: bool = True
     tts_first_audio_timeout_ms: int = 3000
 
     log_dir: str = "./logs"
