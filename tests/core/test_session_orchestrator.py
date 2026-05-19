@@ -62,6 +62,9 @@ def test_mock_session_runs_to_clean_shutdown() -> None:
         assert not orchestrator.context_manager.assistant_turns[-1].interrupted
         assert await live_store.get_call_state("call-1") is None
         assert final_store.call_records["call-1"]["state"] == "closed"
+        assert final_store.call_records["call-1"]["turns"]
+        assert "metrics" in final_store.call_records["call-1"]
+        assert final_store.call_records["call-1"]["transcript_summary"]
 
     asyncio.run(scenario())
 

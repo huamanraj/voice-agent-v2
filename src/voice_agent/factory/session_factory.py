@@ -39,8 +39,8 @@ def create_session_orchestrator(
         stt=provider_registry.create("stt", selection.stt),
         tts=provider_registry.create("tts", selection.tts),
         llm=provider_registry.create("llm", selection.llm),
-        live_store=provider_registry.create("live_store", selection.live_store),
-        final_store=provider_registry.create("final_store", selection.final_store),
+        live_store=_create_live_store(provider_registry, selection.live_store, settings),
+        final_store=_create_final_store(provider_registry, selection.final_store, settings),
     )
     return SessionOrchestrator(call_id=call_id, providers=providers, settings=settings)
 
@@ -59,7 +59,31 @@ def create_session_orchestrator_with_telephony(
         stt=provider_registry.create("stt", selection.stt),
         tts=provider_registry.create("tts", selection.tts),
         llm=provider_registry.create("llm", selection.llm),
-        live_store=provider_registry.create("live_store", selection.live_store),
-        final_store=provider_registry.create("final_store", selection.final_store),
+        live_store=_create_live_store(provider_registry, selection.live_store, settings),
+        final_store=_create_final_store(provider_registry, selection.final_store, settings),
     )
     return SessionOrchestrator(call_id=call_id, providers=providers, settings=settings)
+
+
+def _create_live_store(provider_registry: ProviderRegistry, provider_name: str, settings: Settings):
+    if provider_name == "redis":
+        return provider_registry.create(
+            "live_store",
+            provider_name,
+            redis_url=settings.redis_url,
+            ttl_seconds=settings.redis_live_ttl_seconds,
+        )
+    return provider_registry.create("live_store", provider_name)
+
+
+def _create_final_store(provider_registry: ProviderRegistry, provider_name: str, settings: Settings):
+    if provider_name == "postgres":
+        return provider_registry.create(
+            "final_store",
+            provider_name,
+            dsn=settings.postgres_dsn,
+            connect_timeout_seconds=settings.postgres_connect_timeout_seconds,
+            save_timeout_seconds=settings.postgres_save_timeout_seconds,
+            retry_dir=settings.postgres_retry_dir,
+        )
+    return provider_registry.create("final_store", provider_name)

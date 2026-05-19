@@ -30,6 +30,8 @@ def create_default_registry() -> ProviderRegistry:
     from voice_agent.providers.llm.litellm import LiteLLM
     from voice_agent.providers.llm.mock import MockLLM
     from voice_agent.providers.storage.memory_store import MemoryStore
+    from voice_agent.providers.storage.postgres_final_store import PostgresFinalStore
+    from voice_agent.providers.storage.redis_live_store import RedisLiveStore
     from voice_agent.providers.stt.deepgram import DeepgramSTT
     from voice_agent.providers.stt.mock import MockSTT
     from voice_agent.providers.telephony.mock import MockTelephony
@@ -47,6 +49,8 @@ def create_default_registry() -> ProviderRegistry:
     registry.register("llm", "litellm", LiteLLM)
     registry.register("llm", "mock", MockLLM)
     registry.register("live_store", "memory", MemoryStore)
+    registry.register("live_store", "redis", RedisLiveStore)
     registry.register("final_store", "memory", MemoryStore)
+    registry.register("final_store", "postgres", PostgresFinalStore)
     registry.register("memory", "memory", MemoryStore)
     return registry

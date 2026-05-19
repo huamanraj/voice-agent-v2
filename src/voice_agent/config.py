@@ -63,7 +63,11 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
 
     redis_url: str = "redis://localhost:6379/0"
+    redis_live_ttl_seconds: int = 21600
     postgres_dsn: str = "postgresql://user:pass@localhost:5432/voice_agent"
+    postgres_connect_timeout_seconds: float = 3.0
+    postgres_save_timeout_seconds: float = 5.0
+    postgres_retry_dir: str = "./logs/retry"
 
     max_concurrent_calls_per_worker: int = 5
     queue_audio_in_max: int = 100
@@ -153,6 +157,12 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_full_transcripts: bool = True
     mask_phone_in_shared_logs: bool = True
+    call_log_queue_max: int = 2000
+    call_log_flush_timeout_ms: int = 1000
+
+    post_call_enabled: bool = True
+    post_call_timeout_seconds: float = 15.0
+    post_call_webhook_url: str | None = None
 
     force_interrupt_phrases: tuple[str, ...] = Field(
         default=(

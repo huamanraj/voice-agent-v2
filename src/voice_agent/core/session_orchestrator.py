@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import asdict, dataclass, field
 from collections.abc import AsyncIterator, Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from voice_agent.audio.audio_router import AudioRouter
@@ -43,6 +44,8 @@ from voice_agent.core.interruption.interruption_manager import (
 )
 from voice_agent.core.interruption.sequence_manager import SequenceManager
 from voice_agent.core.context.context_manager import ContextManager
+from voice_agent.core.metrics.latency_tracker import LatencyTracker
+from voice_agent.core.observability.call_logger import AsyncCallLogger
 from voice_agent.core.playback.playback_tracker import PlaybackTracker
 from voice_agent.core.response.sentence_aggregator import aggregate_token_stream
 from voice_agent.core.state_machine import CallState
@@ -101,10 +104,16 @@ class SessionOrchestrator:
     audio_router: AudioRouter = field(init=False)
     playback_tracker: PlaybackTracker = field(init=False)
     context_manager: ContextManager = field(init=False)
+    latency_tracker: LatencyTracker = field(init=False)
+    call_logger: AsyncCallLogger = field(init=False)
     _shutdown_started: bool = field(init=False)
     _active_llm_task: asyncio.Task[None] | None = field(init=False)
     _active_llm_response_id: str | None = field(init=False)
     _active_llm_sequence_id: int | None = field(init=False)
+    _session_started_ms: int = field(init=False)
+    _session_ended_ms: int | None = field(init=False)
+    _first_media_frame_seen: bool = field(init=False)
+    final_record: dict[str, Any] | None = field(init=False)
 
     def __post_init__(self) -> None:
         self.settings = self.settings or get_settings()
@@ -123,6 +132,12 @@ class SessionOrchestrator:
         )
         self.playback_tracker = PlaybackTracker(call_id=self.call_id)
         self.context_manager = ContextManager(system_prompt=self.settings.llm_system_prompt)
+        self.latency_tracker = LatencyTracker()
+        self.call_logger = AsyncCallLogger(
+            call_id=self.call_id,
+            log_dir=Path(self.settings.log_dir),
+            queue_maxsize=self.settings.call_log_queue_max,
+        )
         self.interruption_manager = InterruptionManager(
             call_id=self.call_id,
             settings=self.settings,
@@ -138,17 +153,27 @@ class SessionOrchestrator:
         self._active_llm_task = None
         self._active_llm_response_id = None
         self._active_llm_sequence_id = None
+        self._session_started_ms = now_ms()
+        self._session_ended_ms = None
+        self._first_media_frame_seen = False
+        self.final_record = None
 
     async def start(self) -> None:
         if self.state != CallState.NEW:
             raise RuntimeError(f"Session {self.call_id} already started in state {self.state}.")
 
         self._shutdown_started = False
+        self._session_started_ms = now_ms()
+        self.call_logger.start()
+        self._log("call_started")
         self.state = CallState.STARTING
         await self._save_live_state()
         await self.providers.telephony.start()
+        self._log("provider_connected", provider=self.providers.telephony.provider_name)
         await self.providers.stt.start(self.call_id, language_hint=self.settings.deepgram_language)
+        self._log("provider_connected", provider=self.providers.stt.provider_name)
         await self.providers.tts.start(self.call_id, voice="mock-voice", language="en-IN")
+        self._log("provider_connected", provider=self.providers.tts.provider_name)
 
         self.tasks = {
             "receive_audio_loop": self._create_task("receive_audio_loop", self._receive_audio_loop),
@@ -176,6 +201,7 @@ class SessionOrchestrator:
             "error_loop": self._create_task("error_loop", self._error_loop),
         }
         self.state = CallState.LISTENING
+        self._log("call_listening")
         await self._save_live_state()
 
     async def run(self) -> SessionStats:
@@ -245,6 +271,15 @@ class SessionOrchestrator:
 
     async def _receive_audio_loop(self) -> None:
         async for frame in self.providers.telephony.receive_audio():
+            if not self._first_media_frame_seen:
+                self._first_media_frame_seen = True
+                self._log(
+                    "media_first_frame",
+                    sequence_id=frame.sequence_id,
+                    provider=self.providers.telephony.provider_name,
+                    codec=frame.codec,
+                    sample_rate=frame.sample_rate,
+                )
             self.stats.audio_frames_received += 1
             await self.audio_router.route_inbound(frame)
 
@@ -268,6 +303,14 @@ class SessionOrchestrator:
     async def _stt_receiver_loop(self) -> None:
         async for transcript in self.providers.stt.transcripts():
             self.stats.transcripts_received += 1
+            self.latency_tracker.mark_transcript(None, now_ms(), is_final=transcript.is_final)
+            self._log(
+                "final_transcript" if transcript.is_final else "interim_transcript",
+                provider=transcript.provider,
+                confidence=transcript.confidence,
+                language=transcript.language,
+                text=transcript.text if self.settings.log_full_transcripts else None,
+            )
             packet = self._packet(
                 "transcript_final" if transcript.is_final else "transcript_interim",
                 {"event": transcript},
@@ -288,6 +331,12 @@ class SessionOrchestrator:
 
     async def _stt_speech_loop(self) -> None:
         async for speech_event in self.providers.stt.speech_events():
+            if isinstance(speech_event, SpeechStart):
+                self.latency_tracker.mark_speech_start(None, speech_event.ts_ms)
+                self._log("speech_start", provider=speech_event.source, confidence=speech_event.confidence)
+            else:
+                self.latency_tracker.mark_speech_stop(None, speech_event.ts_ms)
+                self._log("speech_stop", provider=speech_event.source, confidence=speech_event.confidence)
             await put_packet(
                 self.queues.speech_event,
                 self._packet("speech_event", {"event": speech_event}),
@@ -339,6 +388,15 @@ class SessionOrchestrator:
 
     async def _emit_user_turn(self, turn: UserTurnFinal) -> None:
         self.stats.user_turns_finalized += 1
+        self.latency_tracker.mark_end_of_turn(turn.turn_id, now_ms())
+        self._log(
+            "user_turn_final",
+            turn_id=turn.turn_id,
+            confidence=turn.confidence,
+            language=turn.language,
+            text=turn.text if self.settings.log_full_transcripts else None,
+        )
+        await self._save_live_state()
         await put_packet(
             self.queues.turn_event,
             self._packet("user_turn_final", {"event": turn}, turn_id=turn.turn_id),
@@ -390,13 +448,29 @@ class SessionOrchestrator:
         self.interruption_manager.track_response(sequence_id, response_id, message_id)
         self.stats.llm_responses_started += 1
         started_ms = now_ms()
+        self.latency_tracker.mark_llm_start(turn.turn_id, started_ms)
+        self._log(
+            "agent_response_started",
+            turn_id=turn.turn_id,
+            sequence_id=sequence_id,
+            message_id=message_id,
+            response_id=response_id,
+        )
+        self._log("llm_start", turn_id=turn.turn_id, sequence_id=sequence_id, provider=self.providers.llm.provider_name)
+        await self._save_live_state()
         first_token_seen = False
         token_stream = self.providers.llm.stream_response(
             call_id=self.call_id,
             messages=self._llm_messages_for_turn(turn),
             response_id=response_id,
         )
-        tracked_stream = self._tracked_llm_tokens(token_stream, started_ms, first_token_seen)
+        tracked_stream = self._tracked_llm_tokens(
+            token_stream,
+            started_ms,
+            first_token_seen,
+            turn_id=turn.turn_id,
+            sequence_id=sequence_id,
+        )
         try:
             async for text in aggregate_token_stream(
                 tracked_stream,
@@ -436,8 +510,11 @@ class SessionOrchestrator:
                     ),
                     BackpressurePolicy.DROP_OLDEST,
                 )
+            self.latency_tracker.mark_llm_end(turn.turn_id, now_ms())
+            self._log("llm_end", turn_id=turn.turn_id, sequence_id=sequence_id, provider=self.providers.llm.provider_name)
         except asyncio.CancelledError:
             await self.providers.llm.cancel(response_id)
+            self._log("llm_cancel_sent", turn_id=turn.turn_id, sequence_id=sequence_id, provider=self.providers.llm.provider_name)
             raise
 
     async def _tracked_llm_tokens(
@@ -445,13 +522,19 @@ class SessionOrchestrator:
         token_stream: AsyncIterator[str],
         started_ms: int,
         first_token_seen: bool,
+        *,
+        turn_id: int | None = None,
+        sequence_id: int | None = None,
     ) -> AsyncIterator[str]:
         async for token in token_stream:
             if not token:
                 continue
             self.stats.llm_tokens_received += 1
             if not first_token_seen:
-                self.stats.llm_first_token_latency_ms = now_ms() - started_ms
+                token_ms = now_ms()
+                self.stats.llm_first_token_latency_ms = token_ms - started_ms
+                self.latency_tracker.mark_llm_first_token(turn_id, token_ms)
+                self._log("llm_first_token", turn_id=turn_id, sequence_id=sequence_id, provider=self.providers.llm.provider_name)
                 first_token_seen = True
             yield token
 
@@ -475,6 +558,8 @@ class SessionOrchestrator:
                 sequence_id = packet.sequence_id or 0
                 if not self.sequence_manager.is_valid(sequence_id):
                     self.stats.stale_tts_requests_dropped += 1
+                    self.latency_tracker.mark_audio_drop()
+                    self._log("old_audio_chunk_dropped", turn_id=packet.turn_id, sequence_id=sequence_id, packet_type=packet.packet_type)
                     self.queues.tts_request.task_done()
                     continue
                 await put_packet(
@@ -497,15 +582,40 @@ class SessionOrchestrator:
             sequence_id = packet.sequence_id or 0
             if not self.sequence_manager.is_valid(sequence_id):
                 self.stats.stale_tts_requests_dropped += 1
+                self.latency_tracker.mark_audio_drop()
+                self._log("old_audio_chunk_dropped", turn_id=packet.turn_id, sequence_id=sequence_id, packet_type=packet.packet_type)
                 self.queues.tts_request.task_done()
                 continue
 
             self.playback_tracker.mark_text_sent_to_tts(message_id, text)
+            self.latency_tracker.mark_tts_start(packet.turn_id, now_ms())
+            self._log(
+                "tts_start",
+                turn_id=packet.turn_id,
+                sequence_id=sequence_id,
+                message_id=message_id,
+                provider=self.providers.tts.provider_name,
+                text_length=len(text),
+            )
+            first_audio_seen = False
             async for frame in self.providers.tts.synthesize(text, message_id, sequence_id):
                 if not self.sequence_manager.is_valid(sequence_id):
                     self.stats.stale_audio_chunks_dropped += 1
+                    self.latency_tracker.mark_audio_drop()
+                    self._log("old_audio_chunk_dropped", turn_id=packet.turn_id, sequence_id=sequence_id, message_id=message_id)
                     await self.providers.tts.cancel(message_id, "sequence_invalidated")
+                    self._log("tts_cancel_sent", turn_id=packet.turn_id, sequence_id=sequence_id, message_id=message_id)
                     break
+                if not first_audio_seen:
+                    first_audio_seen = True
+                    self.latency_tracker.mark_tts_first_audio(packet.turn_id, now_ms())
+                    self._log(
+                        "tts_first_audio",
+                        turn_id=packet.turn_id,
+                        sequence_id=sequence_id,
+                        message_id=message_id,
+                        provider=self.providers.tts.provider_name,
+                    )
                 self.stats.tts_chunks_created += 1
                 await put_packet(
                     self.queues.tts_audio,
@@ -518,6 +628,8 @@ class SessionOrchestrator:
                     ),
                     BackpressurePolicy.DROP_OLDEST,
                 )
+            self.latency_tracker.mark_tts_end(packet.turn_id, now_ms())
+            self._log("tts_end", turn_id=packet.turn_id, sequence_id=sequence_id, message_id=message_id)
             self.queues.tts_request.task_done()
 
     async def _output_loop(self) -> None:
@@ -532,11 +644,14 @@ class SessionOrchestrator:
             if packet.packet_type == "tts_response_end":
                 if not self.sequence_manager.is_valid(packet.sequence_id):
                     self.stats.stale_audio_chunks_dropped += 1
+                    self.latency_tracker.mark_audio_drop()
+                    self._log("old_audio_chunk_dropped", turn_id=packet.turn_id, sequence_id=packet.sequence_id, packet_type=packet.packet_type)
                     self.queues.tts_audio.task_done()
                     continue
                 message_id = str(packet.data["message_id"])
                 await self.providers.telephony.send_checkpoint(message_id)
                 self.playback_tracker.mark_checkpoint_sent(message_id, message_id)
+                self._log("checkpoint_sent", turn_id=packet.turn_id, sequence_id=packet.sequence_id, message_id=message_id)
                 self.queues.tts_audio.task_done()
                 continue
 
@@ -545,6 +660,8 @@ class SessionOrchestrator:
                 raise TypeError("tts_audio packet must contain an AudioFrame.")
             if not self.sequence_manager.is_valid(packet.sequence_id):
                 self.stats.stale_audio_chunks_dropped += 1
+                self.latency_tracker.mark_audio_drop()
+                self._log("old_audio_chunk_dropped", turn_id=packet.turn_id, sequence_id=packet.sequence_id)
                 self.queues.tts_audio.task_done()
                 continue
 
@@ -555,17 +672,28 @@ class SessionOrchestrator:
                 )
             if decision == OutputDecision.DROP:
                 self.stats.blocked_audio_chunks_dropped += 1
+                self.latency_tracker.mark_audio_drop()
                 self.queues.tts_audio.task_done()
                 continue
             if decision == OutputDecision.WAIT:
                 self.stats.waited_audio_chunks_dropped += 1
+                self.latency_tracker.mark_audio_drop()
                 self.queues.tts_audio.task_done()
                 continue
 
             await self.providers.telephony.send_audio(frame)
             self.playback_tracker.mark_audio_sent(frame, timestamp_ms=now_ms())
+            self.latency_tracker.mark_first_audio_sent(packet.turn_id, now_ms())
             self.interruption_manager.mark_agent_audio_sent(packet.sequence_id)
             self.stats.audio_chunks_sent += 1
+            self._log(
+                "play_audio_sent",
+                turn_id=packet.turn_id,
+                sequence_id=packet.sequence_id,
+                message_id=str(frame.meta.get("message_id", "")) or None,
+                provider=self.providers.telephony.provider_name,
+                duration_ms=frame.duration_ms,
+            )
             self.queues.tts_audio.task_done()
 
     async def invalidate_pending_output(self, reason: str) -> set[int]:
@@ -593,10 +721,18 @@ class SessionOrchestrator:
 
             if decision.outcome == InterruptionOutcome.CANDIDATE:
                 self.stats.interruption_candidates_started += 1
+                self._log("interruption_candidate_started")
             elif decision.outcome == InterruptionOutcome.CONFIRMED:
                 self.stats.interruptions_confirmed += 1
                 self.state = CallState.INTERRUPTED
                 if isinstance(decision.event, InterruptionStarted):
+                    self.latency_tracker.mark_interruption(decision.event.turn_id, decision.event.ts_ms)
+                    self._log(
+                        "interruption_confirmed",
+                        sequence_id=decision.event.sequence_id,
+                        reason=decision.event.reason,
+                        transcript=decision.event.transcript if self.settings.log_full_transcripts else None,
+                    )
                     await put_packet(
                         self.queues.metrics,
                         self._packet("interruption_started", {"event": decision.event}),
@@ -605,6 +741,11 @@ class SessionOrchestrator:
             elif decision.outcome == InterruptionOutcome.REJECTED:
                 self.stats.interruptions_rejected += 1
                 if isinstance(decision.event, InterruptionRejected):
+                    self._log(
+                        "interruption_rejected",
+                        sequence_id=decision.event.sequence_id,
+                        reason=decision.event.reason,
+                    )
                     await put_packet(
                         self.queues.metrics,
                         self._packet("interruption_rejected", {"event": decision.event}),
@@ -618,6 +759,9 @@ class SessionOrchestrator:
         playback = self.playback_tracker.mark_interrupted(event)
         if playback is not None:
             self.context_manager.update_assistant_from_playback(playback)
+        if self.settings.clear_audio_on_confirmed_interrupt:
+            self.latency_tracker.mark_clear_sent(event.turn_id, now_ms())
+            self._log("clear_playback_sent", sequence_id=event.sequence_id, reason=event.reason)
 
         active_task = self._active_llm_task
         if (
@@ -641,6 +785,8 @@ class SessionOrchestrator:
                 retained.append(packet)
             else:
                 dropped += 1
+                self.latency_tracker.mark_audio_drop()
+                self._log("old_audio_chunk_dropped", sequence_id=packet.sequence_id, packet_type=packet.packet_type)
 
         for packet in retained:
             queue.put_nowait(packet)
@@ -652,6 +798,19 @@ class SessionOrchestrator:
             playback = self.playback_tracker.handle_playback_event(event)
             if playback is not None:
                 self.context_manager.update_assistant_from_playback(playback)
+            if event.event_type == "started":
+                self.latency_tracker.mark_first_audio_played(None, event.ts_ms)
+            elif event.event_type == "checkpoint_played":
+                self.latency_tracker.mark_final_audio_played(None, event.ts_ms)
+                self._log(
+                    "checkpoint_played",
+                    sequence_id=event.sequence_id,
+                    message_id=event.message_id,
+                    checkpoint_id=event.checkpoint_id,
+                )
+            elif event.event_type == "cleared":
+                self.latency_tracker.mark_clear_ack(None, event.ts_ms)
+                self._log("clear_playback_ack", sequence_id=event.sequence_id)
             await put_packet(
                 self.queues.playback_event,
                 self._packet("playback_event", {"event": event}, sequence_id=event.sequence_id),
@@ -671,6 +830,14 @@ class SessionOrchestrator:
             error = packet.data.get("error")
             if isinstance(error, ProviderError):
                 self.errors.append(error)
+                self.latency_tracker.mark_provider_error()
+                self._log(
+                    "provider_error",
+                    provider=error.provider,
+                    error_type=error.error_type,
+                    error_code=error.error_code,
+                    retryable=error.retryable,
+                )
             self.queues.error.task_done()
 
     async def _drain_loop(self, queue: asyncio.Queue[AgentPacket]) -> None:
@@ -730,23 +897,134 @@ class SessionOrchestrator:
             return
         await self.providers.live_store.set_call_state(
             self.call_id,
-            {"state": self.state.value, "stats": asdict(self.stats)},
+            self._live_state_payload(),
         )
 
     async def _finalize_closed(self, reason: str = "closed") -> None:
         if self.state == CallState.CLOSED:
             return
         self.state = CallState.CLOSED
+        self._session_ended_ms = now_ms()
+        self._log("call_ended", reason=reason, stats=asdict(self.stats))
+        self.final_record = self._final_call_record(reason)
         if self.providers.final_store is not None:
             await self.providers.final_store.save_call(
                 self.call_id,
-                {
-                    "call_id": self.call_id,
-                    "reason": reason,
-                    "state": self.state.value,
-                    "stats": asdict(self.stats),
-                    "errors": [error.message for error in self.errors],
-                },
+                self.final_record,
             )
         if self.providers.live_store is not None:
             await self.providers.live_store.delete_call_state(self.call_id)
+        await self.call_logger.stop(self.settings.call_log_flush_timeout_ms / 1000)
+
+    def _log(
+        self,
+        event_name: str,
+        *,
+        turn_id: int | None = None,
+        sequence_id: int | None = None,
+        message_id: str | None = None,
+        provider: str | None = None,
+        **details: Any,
+    ) -> None:
+        self.call_logger.emit(
+            event_name,
+            turn_id=turn_id,
+            sequence_id=sequence_id,
+            message_id=message_id,
+            provider=provider,
+            state=self.state.value if hasattr(self, "state") else None,
+            **details,
+        )
+
+    def _live_state_payload(self) -> dict[str, Any]:
+        return {
+            "call_id": self.call_id,
+            "state": self.state.value,
+            "updated_ms": now_ms(),
+            "current_sequence_id": self.sequence_manager.current_sequence_id,
+            "active_response": {
+                "response_id": self._active_llm_response_id,
+                "sequence_id": self._active_llm_sequence_id,
+            },
+            "stats": asdict(self.stats),
+            "metrics": self.latency_tracker.summary().as_dict(),
+            "turns": self._turn_records(),
+            "errors": [asdict(error) for error in self.errors],
+        }
+
+    def _final_call_record(self, reason: str) -> dict[str, Any]:
+        metrics = self.latency_tracker.summary().as_dict()
+        metrics["audio_drop_count"] = (
+            self.stats.stale_audio_chunks_dropped
+            + self.stats.blocked_audio_chunks_dropped
+            + self.stats.waited_audio_chunks_dropped
+            + self.stats.pending_tts_requests_purged
+            + self.stats.pending_tts_audio_purged
+        )
+        metrics["provider_error_count"] = len(self.errors)
+        metrics["interruption_count"] = self.stats.interruptions_confirmed
+        turns = self._turn_records()
+        return {
+            "call_id": self.call_id,
+            "reason": reason,
+            "state": self.state.value,
+            "started_ms": self._session_started_ms,
+            "ended_ms": self._session_ended_ms or now_ms(),
+            "stats": asdict(self.stats),
+            "metrics": metrics,
+            "turns": turns,
+            "transcript_summary": self.context_manager.summary_text or _summarize_turns(turns),
+            "errors": [error.message for error in self.errors],
+            "provider_errors": [asdict(error) for error in self.errors],
+            "playback": {
+                message_id: asdict(playback)
+                for message_id, playback in self.playback_tracker.messages.items()
+            },
+        }
+
+    def _turn_records(self) -> list[dict[str, Any]]:
+        records: list[tuple[int, int, dict[str, Any]]] = []
+        for index, user_turn in enumerate(self.context_manager.user_turns):
+            records.append(
+                (
+                    user_turn.timestamp_ms,
+                    index,
+                    {
+                        "speaker": "user",
+                        "turn_id": user_turn.turn_id,
+                        "text": user_turn.text,
+                        "timestamp_ms": user_turn.timestamp_ms,
+                        "confidence": user_turn.confidence,
+                        "language": user_turn.language,
+                    },
+                )
+            )
+        for index, assistant_turn in enumerate(self.context_manager.assistant_turns):
+            records.append(
+                (
+                    assistant_turn.created_ms,
+                    index,
+                    {
+                        "speaker": "assistant",
+                        "message_id": assistant_turn.message_id,
+                        "sequence_id": assistant_turn.sequence_id,
+                        "text": assistant_turn.heard_text,
+                        "full_text": assistant_turn.full_text,
+                        "heard_text": assistant_turn.heard_text,
+                        "interrupted": assistant_turn.interrupted,
+                        "created_ms": assistant_turn.created_ms,
+                        "fully_played_ms": assistant_turn.fully_played_ms,
+                    },
+                )
+            )
+        records.sort(key=lambda item: (item[0], item[1]))
+        return [record for _, _, record in records]
+
+
+def _summarize_turns(turns: list[dict[str, Any]], max_chars: int = 1000) -> str:
+    text = "\n".join(
+        f"{turn.get('speaker', 'unknown')}: {turn.get('heard_text') or turn.get('text') or ''}".strip()
+        for turn in turns
+        if turn.get("heard_text") or turn.get("text")
+    )
+    return text[:max_chars].rstrip()
