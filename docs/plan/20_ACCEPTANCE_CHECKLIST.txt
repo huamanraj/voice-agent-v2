@@ -1,0 +1,100 @@
+20 ACCEPTANCE CHECKLIST
+=======================
+
+Architecture:
+[ ] Core imports only contracts, not providers.
+[ ] Providers are selected through registry/config.
+[ ] Mock providers run full session.
+[ ] All queues are bounded.
+[ ] All tasks are cancellable.
+[ ] EOS is supported.
+
+Telephony:
+[ ] Vobiz start event parsed.
+[ ] Vobiz media base64 decoded.
+[ ] playAudio works.
+[ ] checkpoint sent.
+[ ] playedStream handled.
+[ ] clearAudio sent on interruption.
+[ ] clearedAudio handled.
+[ ] WebSocket close ends call.
+
+Audio:
+[ ] mulaw 8k decoded correctly.
+[ ] PCM16 conversion works.
+[ ] 8k to 16k resampling works.
+[ ] 20 ms chunking works.
+[ ] VAD receives PCM16 16k.
+[ ] TTS output is telephony-compatible.
+
+STT:
+[ ] Deepgram connects.
+[ ] KeepAlive every 3 sec.
+[ ] Interim transcripts received.
+[ ] Final transcripts received.
+[ ] Reconnect works or fails gracefully.
+[ ] Hindi/Hinglish tested.
+
+Turn Detection:
+[ ] Does not reply during mid-sentence pause.
+[ ] Short yes/no answers work.
+[ ] Smart-Turn integrated.
+[ ] Max silence fallback works.
+[ ] Agent interrupted user metric logged.
+
+Interruption:
+[ ] min_interrupt_words configurable.
+[ ] Force phrases interrupt.
+[ ] Backchannel phrases do not interrupt.
+[ ] OutputGate WAIT works.
+[ ] OutputGate BLOCK works.
+[ ] Sequence invalidation works.
+[ ] LLM cancel called.
+[ ] TTS cancel called.
+[ ] Telephony clear_playback called.
+[ ] Old chunks dropped.
+[ ] Old tokens ignored.
+
+LLM:
+[ ] Streaming works.
+[ ] Sentence aggregation works.
+[ ] Cancellation works.
+[ ] Responses are short and voice-friendly.
+[ ] Listener JSON optional works.
+
+TTS:
+[ ] First audio fast.
+[ ] Audio plays on phone.
+[ ] Cancel works.
+[ ] Late chunks after cancel are dropped.
+[ ] Word timestamps stored if available.
+
+Playback/context:
+[ ] checkpoint played updates PlaybackTracker.
+[ ] clearAudio marks message interrupted.
+[ ] Context stores heard partial text.
+[ ] Full unspoken response is not treated as heard.
+
+Storage:
+[ ] Redis live state saved.
+[ ] Redis TTL set.
+[ ] Postgres call saved.
+[ ] Turns saved.
+[ ] Metrics saved.
+
+Observability:
+[ ] Per-call log exists.
+[ ] Structured JSONL log optional.
+[ ] Latency summary exists.
+[ ] Provider errors logged.
+[ ] Audio drops counted.
+[ ] Interruption reasons logged.
+
+Real call:
+[ ] 20+ real calls tested.
+[ ] Greeting interruption tested.
+[ ] Long answer interruption tested.
+[ ] Hindi tested.
+[ ] English tested.
+[ ] Hinglish tested.
+[ ] No major old-audio leak.

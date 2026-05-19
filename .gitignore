@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments and uv
+.venv/
+.uv-cache/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# Runtime output
+logs/*
+!logs/.gitkeep
+models/*.onnx
+!models/.gitkeep
+*.log
+*.jsonl
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local scratch
+tmp/
+scratch/

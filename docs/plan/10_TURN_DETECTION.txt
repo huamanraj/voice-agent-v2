@@ -1,0 +1,147 @@
+10 TURN DETECTION
+=================
+
+Purpose:
+Decide when the user has finished speaking.
+
+Files:
+src/voice_agent/core/turn_detection/turn_manager.py
+src/voice_agent/core/turn_detection/smart_turn_runner.py
+src/voice_agent/core/turn_detection/rules.py
+src/voice_agent/core/turn_detection/expected_answer.py
+
+Inputs:
+- SpeechStart from VAD/STT
+- SpeechStop from VAD/STT
+- InterimTranscript
+- FinalTranscript
+- SmartTurnResult
+- timers
+- ExpectedAnswer context
+
+Output:
+- UserTurnFinal
+
+TurnManager must not:
+- cancel TTS
+- cancel LLM
+- clear playback
+- invalidate sequence IDs
+
+That is InterruptionManager's job.
+
+TurnState:
+- is_user_speaking
+- user_started_ms
+- last_speech_ms
+- last_transcript_ms
+- interim_text
+- final_fragments
+- last_final_ms
+- stt_speech_final_seen
+- vad_stop_seen
+- smart_turn_complete
+- smart_turn_confidence
+- emitted_turn
+
+Basic end-of-turn logic:
+1. User started speaking.
+2. User spoke at least min_user_speech_ms.
+3. Some transcript exists.
+4. Silence >= min_silence_for_turn_end_ms.
+5. Smart-Turn says complete with confidence >= threshold.
+6. If Smart-Turn is missing or incomplete, force end after max_silence_before_force_end_ms.
+
+Pseudo:
+if no user_started_ms:
+    return False
+
+if speech_duration < min_user_speech_ms:
+    return False
+
+if no text:
+    return False
+
+if silence_ms < min_silence_for_turn_end_ms:
+    return False
+
+if smart_turn_enabled:
+    if smart_turn_complete and confidence >= threshold:
+        return True
+    if silence_ms >= max_silence_before_force_end_ms:
+        return True
+    return False
+
+return vad_stop_seen or stt_speech_final_seen
+
+ExpectedAnswer:
+Some short answers are valid.
+Example:
+AI asks: "Kya aap interested hain?"
+User says: "haan"
+This is a full turn, not backchannel.
+
+ExpectedAnswer fields:
+- answer_type: yes_no/name/number/date/confirmation/free_text
+- short_answer_allowed
+- min_words
+
+ContextManager should set expected answer before the agent asks a question.
+
+Hindi/Hinglish incomplete endings:
+Wait more if text ends with:
+- aur
+- ki
+- ke
+- to
+- phir
+- matlab
+- jaise
+- kyunki
+- but
+- and
+- so
+- because
+- then
+- actually
+
+Example:
+"mujhe problem hai ki"
+Do not reply yet.
+
+Complete short answers:
+- haan
+- nahi
+- yes
+- no
+- ji
+- ok
+- theek hai
+- kal
+- aaj
+- abhi
+
+Only treat these as complete when expected answer allows it.
+
+Agent interrupted user detection:
+If AI starts speaking too early and user continues speaking:
+- cancel current AI response
+- clear playback
+- mark agent_interrupted_user_count
+- return to listening
+
+Metrics:
+- user_speech_start_ms
+- speech_stop_ms
+- first_interim_ms
+- first_final_ms
+- smart_turn_result_ms
+- end_of_turn_decision_ms
+- agent_interrupted_user_count
+
+Acceptance:
+- User pause mid-sentence does not trigger early response.
+- Complete short answer after yes/no question triggers response.
+- "haan" while AI is speaking is treated as backchannel by InterruptionManager.
+- Smart-Turn incomplete causes wait.
+- Max silence prevents waiting forever.

@@ -1,0 +1,171 @@
+04 QUEUE-BASED TASK ORCHESTRATION
+=================================
+
+Purpose:
+Build Bolna-style non-blocking communication between pipeline stages.
+
+Main orchestrator:
+src/voice_agent/core/session_orchestrator.py
+
+One SessionOrchestrator instance per active call.
+
+Main queues:
+- telephony_audio_in_queue
+- stt_audio_queue
+- vad_audio_queue
+- rolling_audio_queue
+- transcript_event_queue
+- speech_event_queue
+- turn_event_queue
+- interruption_event_queue
+- llm_request_queue
+- llm_output_queue
+- tts_request_queue
+- tts_audio_queue
+- telephony_audio_out_queue
+- playback_event_queue
+- metrics_queue
+- dtmf_queue
+- error_queue
+
+Recommended sizes:
+telephony_audio_in_queue: 100 frames
+stt_audio_queue: 150 frames
+vad_audio_queue: 150 frames
+transcript_event_queue: 500 events
+speech_event_queue: 500 events
+turn_event_queue: 100 events
+interruption_event_queue: 100 events
+llm_output_queue: 500 chunks
+tts_audio_queue: 200 chunks
+telephony_audio_out_queue: 200 chunks
+playback_event_queue: 500 events
+metrics_queue: 1000 events
+dtmf_queue: 100 digits
+
+Queue backpressure rules:
+1. WebSocket receive loop must not block for long.
+2. If inbound audio queue is full, drop oldest low-priority frame and log.
+3. If outbound queue is full during interruption, drop invalid sequence chunks first.
+4. Metrics queue must never block audio.
+5. Error queue should be high priority.
+
+TaskManager-like responsibilities:
+- create providers
+- start providers
+- start pipeline tasks
+- route packets between queues
+- handle interruption
+- validate sequence IDs
+- track call state
+- track latency
+- save final call
+- shutdown cleanly
+
+Session startup steps:
+1. Load call metadata.
+2. Load agent configuration.
+3. Create provider adapters from registry.
+4. Create all queues.
+5. Create core modules.
+6. Start telephony adapter.
+7. Start STT adapter.
+8. Start TTS adapter if needed.
+9. Start loops:
+   - receive_audio_loop
+   - stt_sender_loop
+   - stt_receiver_loop
+   - vad_processor_loop
+   - rolling_buffer_loop
+   - turn_manager_loop
+   - interruption_manager_loop
+   - llm_loop
+   - tts_loop
+   - output_loop
+   - playback_loop
+   - metrics_loop
+10. Enter conversation state.
+
+Core loops:
+
+receive_audio_loop:
+- async for frame in telephony.receive_audio()
+- create AudioFrame packet
+- route to stt_audio_queue, vad_audio_queue, rolling_audio_queue
+
+stt_sender_loop:
+- read stt_audio_queue
+- send audio to STT adapter
+- handle provider errors
+
+stt_receiver_loop:
+- async for transcript in stt.transcripts()
+- push transcript packets to transcript_event_queue
+
+vad_processor_loop:
+- read vad_audio_queue
+- convert to PCM16 16k if needed
+- run VAD
+- push SpeechStart/SpeechStop events to speech_event_queue
+
+turn_manager_loop:
+- read transcript_event_queue and speech_event_queue
+- combine STT + VAD + Smart-Turn
+- emit UserTurnFinal to turn_event_queue
+
+interruption_manager_loop:
+- read speech/transcript events
+- if user speaks while agent speaking:
+  - set OutputGate WAIT
+  - classify as interruption/backchannel
+  - emit InterruptionStarted or InterruptionRejected
+
+llm_loop:
+- read UserTurnFinal
+- create sequence_id
+- stream LLM tokens
+- sentence aggregate
+- push sentence packets to tts_request_queue
+
+tts_loop:
+- read tts_request_queue
+- synthesize streaming audio
+- attach sequence_id
+- push chunks to tts_audio_queue
+
+output_loop:
+- read tts_audio_queue
+- validate sequence_id
+- check OutputGate
+- send allowed audio to telephony
+- drop stale audio
+- update PlaybackTracker
+
+playback_loop:
+- read telephony.playback_events()
+- update PlaybackTracker
+- update latency metrics
+
+metrics_loop:
+- read metrics_queue
+- write structured logs
+- flush summaries periodically
+
+Shutdown flow:
+1. Mark call state CLOSING.
+2. Send EOS to queues.
+3. Cancel active LLM/TTS.
+4. Stop STT adapter.
+5. Stop TTS adapter.
+6. Stop telephony adapter.
+7. Flush logs.
+8. Save final state to Postgres.
+9. Delete/expire Redis live state.
+10. Mark CLOSED.
+
+Acceptance:
+- No loop silently dies.
+- If one provider fails, error is logged with call_id.
+- Shutdown does not hang.
+- Queues never grow without limit.
+- Invalid sequence chunks are dropped.

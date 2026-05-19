@@ -1,0 +1,122 @@
+18 TESTING PLAN
+===============
+
+Purpose:
+Test core logic deeply before real calls.
+
+Testing order:
+1. Contract tests
+2. Core unit tests with mocks
+3. Simulation tests
+4. Provider smoke tests
+5. Real Vobiz calls
+6. Load/interruption tests
+
+Contract tests:
+- TelephonyPort methods exist.
+- STTPort emits TranscriptEvent.
+- TTSPort emits AudioFrame chunks.
+- LLMPort streams text.
+- Store ports save and load.
+
+Core tests:
+TurnManager:
+- full sentence -> UserTurnFinal
+- mid-sentence pause -> no final
+- "mujhe problem hai ki" -> wait more
+- "haan" after yes/no -> final
+- silence timeout -> final
+
+InterruptionManager:
+- "haan" while AI speaking -> reject
+- "hmm" while AI speaking -> reject
+- "wait" -> confirm
+- "ruk jao" -> confirm
+- 3 words -> confirm
+- cough no transcript -> reject
+- long speech with text -> confirm
+
+OutputGate:
+- valid sequence SEND -> allowed
+- WAIT -> held/delayed
+- BLOCK -> dropped
+- invalid sequence -> dropped
+- new sequence after interruption -> allowed
+
+SequenceManager:
+- next creates new ID
+- invalidate_pending removes old IDs
+- old ID invalid after interruption
+
+PlaybackTracker:
+- checkpoint played -> fully played
+- clear playback -> interrupted/cleared
+- heard text estimated
+
+Simulation tests:
+Use mock providers.
+
+Scenarios:
+1. normal call:
+user -> agent -> user -> agent -> hangup
+
+2. interruption:
+agent long response
+user says wait
+old audio stops
+new input handled
+
+3. backchannel:
+agent speaks
+user says haan
+agent continues
+
+4. agent interrupted user:
+agent replies too early
+user continues
+agent stops and listens
+
+5. late chunks:
+TTS sends old chunk after cancel
+output drops it
+
+Provider smoke tests:
+Vobiz:
+- start parsed
+- media decoded
+- playAudio heard
+- checkpoint/playedStream works
+- clearAudio works
+
+Deepgram:
+- connect
+- KeepAlive
+- interim
+- final
+- reconnect
+
+Cartesia:
+- connect
+- first audio
+- cancel context
+- output format correct
+
+Sarvam:
+- STT codemix quality test
+- TTS mulaw output test
+
+Real call tests:
+- Hindi
+- English
+- Hinglish
+- noisy room
+- short answers
+- interruptions
+- greeting interruption
+- long question interruption
+- DTMF if needed
+
+Acceptance:
+- 100+ mock interruption tests pass.
+- 20+ real calls pass before production.
+- Logs explain every failure.

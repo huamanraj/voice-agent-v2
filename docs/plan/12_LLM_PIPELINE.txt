@@ -1,0 +1,107 @@
+12 LLM PIPELINE
+===============
+
+Purpose:
+Generate fast, natural, short voice responses.
+
+Files:
+src/voice_agent/providers/llm/litellm.py
+src/voice_agent/providers/llm/mock.py
+src/voice_agent/core/response/sentence_aggregator.py
+src/voice_agent/core/context/context_manager.py
+
+LLM roles:
+1. Talker LLM
+   Generates user-facing answer.
+
+2. Listener/Guard LLM
+   Optional classifier for:
+   - hangup intent
+   - language switch
+   - escalation
+   - off-topic
+   - sentiment
+   - structured extraction
+
+Talker requirements:
+- streaming required
+- low first token latency
+- short answer style
+- one question at a time
+- natural Hinglish if user speaks Hinglish
+- no long paragraphs
+
+Listener requirements:
+- JSON mode preferred
+- should not run on every interim
+- run after final user turn or strong signal
+
+LLMPort:
+- stream_response(call_id, messages, response_id)
+- classify(call_id, prompt, schema)
+- cancel(response_id)
+- stop()
+
+Conversation prompt rules:
+- Keep response short for TTS.
+- Ask one question at a time.
+- Use user language style.
+- If user interrupts, address the new input first.
+- Do not repeat a long question after interruption.
+- Avoid robotic phrases.
+- For phone calls, use comma-like pauses naturally.
+- Do not output markdown.
+
+Sentence aggregation:
+Do not send every token to TTS.
+Aggregate until:
+- sentence end
+- 80 to 160 characters
+- 500 ms timeout
+- natural pause marker
+
+Example:
+LLM tokens:
+"ठीक है, मैं check कर रही हूँ. आपका order number बता देंगे?"
+
+Aggregator outputs:
+1. "ठीक है, मैं check कर रही हूँ."
+2. "आपका order number बता देंगे?"
+
+Sequence validation:
+Every LLM response has:
+- response_id
+- sequence_id
+- turn_id
+
+If sequence_id invalid:
+- stop reading tokens
+- call llm.cancel(response_id) if possible
+- do not send more text to TTS
+
+Filler option:
+If LLM is slow, use cached filler audio:
+- "ठीक है, मैं check कर रही हूँ."
+- "एक second."
+- "समझ गई."
+
+Filler should use special sequence_id=-1 or its own valid sequence.
+Do not overuse fillers.
+
+LLM error handling:
+- If timeout before first token:
+  - retry once
+  - play fallback
+- If rate limited:
+  - use fallback model if configured
+  - else play apology
+- If stream fails mid-answer:
+  - stop current response
+  - do not send partial broken sentence if not already spoken
+
+Acceptance:
+- LLM first token tracked.
+- LLM can be cancelled on interruption.
+- Sentence aggregator sends clean chunks to TTS.
+- No markdown or long paragraphs are spoken.
+- Old LLM stream cannot send text to current TTS after interruption.

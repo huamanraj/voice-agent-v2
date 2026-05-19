@@ -1,0 +1,69 @@
+22 REFERENCE NOTES
+==================
+
+This plan combines:
+1. Our current voice-agent plan:
+   - Vobiz Streaming WebSocket
+   - Deepgram/Sarvam STT
+   - Cartesia/Sarvam TTS
+   - VAD + Smart-Turn
+   - Redis + Postgres
+   - clearAudio interruption
+   - structured logs
+
+2. Bolna-style architecture ideas:
+   - TaskManager-like runtime orchestrator
+   - queue-based non-blocking pipeline
+   - provider registry/factory pattern
+   - sequence IDs for interruption safety
+   - output validation before sending audio
+   - latency tracking
+   - AssistantManager-style post-call tasks
+   - DTMF queue optional
+   - filler/backchannel ideas optional
+
+Important difference:
+We are not copying Bolna directly.
+We are using the proven architecture pattern and customizing for:
+- Vobiz clearAudio
+- checkpoint/playedStream
+- provider-swappable core
+- Hindi/Hinglish turn rules
+- stronger backchannel vs real interruption logic
+- central AudioRouter and converter
+
+Key provider-specific notes:
+Vobiz:
+- JSON WebSocket events
+- media payload base64
+- playAudio for outbound audio
+- clearAudio for playback clearing
+- checkpoint and playedStream for playback tracking
+
+Deepgram:
+- streaming STT
+- KeepAlive every 3 seconds
+- interim and final transcripts
+- provider VAD events available
+
+Sarvam:
+- useful for Hindi/Hinglish STT testing
+- may require PCM audio
+- codemix mode should be tested
+
+Cartesia:
+- streaming TTS
+- context_id per response/message
+- cancel context on interruption
+- telephony-friendly output format if available
+
+Most important engineering principle:
+Do not let provider details leak into core.
+
+Most important interruption principle:
+Cancel is not enough.
+Invalidate sequence IDs and drop stale chunks.
+
+Most important turn detection principle:
+Do not use silence alone.
+Use transcript + VAD + Smart-Turn + timers.

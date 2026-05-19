@@ -1,0 +1,121 @@
+15 STORAGE AND PERSISTENCE
+==========================
+
+Purpose:
+Keep live state fast and final records durable.
+
+Live store:
+Redis
+
+Final store:
+Postgres
+
+Files:
+src/voice_agent/providers/storage/redis_live_store.py
+src/voice_agent/providers/storage/postgres_final_store.py
+src/voice_agent/providers/storage/memory_store.py
+src/voice_agent/persistence/schema.sql
+
+Redis live keys:
+call:{call_id}:meta
+call:{call_id}:state
+call:{call_id}:active_response
+call:{call_id}:turns
+call:{call_id}:metrics
+call:{call_id}:errors
+
+TTL:
+6 hours default.
+
+Redis use:
+- pending call state
+- active call status
+- current sequence_id
+- current response_id
+- temporary metrics
+- live debug info
+
+Do not use Redis in audio hot path if it adds delay.
+Write asynchronously or batch.
+
+Postgres tables:
+agents
+calls
+turns
+call_metrics
+provider_errors
+
+agents:
+- agent_id
+- name
+- system_prompt
+- provider overrides
+- voice config
+- language_default
+- created_at
+
+calls:
+- call_id
+- agent_id
+- caller
+- started_at
+- ended_at
+- end_reason
+- transcript_summary
+- error_count
+
+turns:
+- id
+- call_id
+- turn_index
+- speaker
+- text
+- full_text optional
+- heard_text optional
+- interrupted
+- latency_ms
+- created_at
+
+call_metrics:
+- call_id
+- avg_stt_latency_ms
+- avg_llm_first_token_ms
+- avg_tts_first_audio_ms
+- avg_voice_to_voice_ms
+- interruption_count
+- agent_interrupted_user_count
+- audio_drop_count
+- provider_error_count
+
+provider_errors:
+- id
+- call_id
+- provider
+- error_type
+- error_code
+- message
+- retryable
+- created_at
+
+Save timing:
+During call:
+- Redis + file logs
+
+After hangup:
+- flush turns to Postgres
+- save metrics
+- save summary
+- expire Redis
+
+Failure handling:
+If Postgres unavailable:
+- keep local call log
+- write retry file
+- do not block call shutdown forever
+
+Acceptance:
+- Live state visible during active call.
+- Final transcript saved after hangup.
+- Interrupted turns saved correctly.
+- Metrics saved after call.
+- Redis state expires.

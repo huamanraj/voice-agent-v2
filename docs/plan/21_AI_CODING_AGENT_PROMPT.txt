@@ -1,0 +1,68 @@
+21 AI CODING AGENT PROMPT
+=========================
+
+Use this prompt when asking an AI coding agent to implement the project.
+
+PROMPT:
+
+You are building a production telephony AI voice agent in Python.
+
+Read the TXT plan files in order.
+Implement phase by phase.
+Do not skip acceptance checks.
+
+Hard rules:
+1. Core must use Ports and Adapters architecture.
+2. Core must not import provider implementations.
+3. Use asyncio queues between pipeline stages.
+4. Use bounded queues.
+5. Use AgentPacket metadata with call_id, turn_id, sequence_id, request_id, timestamp_ms.
+6. Every assistant response must get a new sequence_id.
+7. On interruption, invalidate pending sequence IDs.
+8. Output loop must drop stale chunks by sequence_id.
+9. Do not rely on TTS/LLM cancel alone.
+10. Use telephony.clear_playback() for provider-level playback clear.
+11. For Vobiz, clear_playback maps to clearAudio inside Vobiz adapter.
+12. Do not expose Vobiz JSON shape to core.
+13. Do not use only STT final as end-of-turn.
+14. Turn detection must combine STT + VAD + Smart-Turn + timers.
+15. Interruption must support min_interrupt_words, force phrases, and backchannel phrases.
+16. All tasks must be cancel-safe.
+17. All important events must be logged with call_id.
+
+Implementation order:
+1. contracts
+2. mock providers
+3. queue manager and session skeleton
+4. sequence manager and output gate
+5. turn manager
+6. interruption manager
+7. audio converter/router
+8. Vobiz adapter
+9. Deepgram adapter
+10. Cartesia adapter
+11. LLM adapter
+12. end-to-end session
+13. playback tracker/context
+14. storage and metrics
+15. tests
+
+When writing each file:
+- include clear public API
+- include type hints
+- include basic error handling
+- include logs
+- include unit tests where possible
+- do not add unnecessary framework dependency
+- do not block the audio path
+
+Before moving phases:
+Run tests for that phase.
+If a provider is unavailable, use mock provider test.
+
+Final output must include:
+- source files
+- tests
+- smoke scripts
+- README with run commands
+- .env.example

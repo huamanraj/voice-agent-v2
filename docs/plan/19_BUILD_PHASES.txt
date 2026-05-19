@@ -1,0 +1,162 @@
+19 BUILD PHASES
+===============
+
+Purpose:
+Give exact build order for AI coding agent.
+
+Phase 0: Project setup
+Build:
+- pyproject.toml
+- src package
+- config
+- logging setup
+Acceptance:
+uv run python -c "import voice_agent"
+
+Phase 1: Contracts
+Build:
+- AudioFrame
+- AgentPacket
+- events
+- ports
+- capabilities
+Acceptance:
+All contracts importable.
+No provider code yet.
+
+Phase 2: Mock providers
+Build:
+- MockTelephony
+- MockSTT
+- MockTTS
+- MockLLM
+- MemoryStore
+Acceptance:
+Full fake call can run without external APIs.
+
+Phase 3: Queue manager + SessionOrchestrator skeleton
+Build:
+- queues
+- task startup/shutdown
+- EOS handling
+- state machine
+Acceptance:
+Mock session starts and shuts down cleanly.
+
+Phase 4: OutputGate + SequenceManager
+Build:
+- sequence creation
+- invalidation
+- output validation
+Acceptance:
+Old chunks are dropped in tests.
+
+Phase 5: TurnManager
+Build:
+- VAD/STT/timer decision
+- expected answer context
+- Hinglish rules
+Acceptance:
+Turn tests pass.
+
+Phase 6: InterruptionManager
+Build:
+- soft/hard interruption
+- min_interrupt_words
+- force phrases
+- backchannel phrases
+Acceptance:
+Interruption tests pass with mocks.
+
+Phase 7: Audio pipeline
+Build:
+- converter
+- chunker
+- rolling buffer
+- audio router
+Acceptance:
+Audio format tests pass.
+
+Phase 8: Vobiz adapter
+Build:
+- start/media/playAudio/checkpoint/playedStream/clearAudio
+Acceptance:
+Echo test works on Vobiz.
+
+Phase 9: Deepgram STT
+Build:
+- WebSocket
+- params
+- KeepAlive
+- transcripts
+- reconnect
+Acceptance:
+Real audio transcribes.
+
+Phase 10: Cartesia TTS
+Build:
+- WebSocket
+- context_id
+- audio chunks
+- cancel
+Acceptance:
+Audio plays and cancel works.
+
+Phase 11: LLM adapter + sentence aggregator
+Build:
+- streaming talker
+- JSON listener optional
+- cancellation
+Acceptance:
+Natural short replies.
+
+Phase 12: End-to-end session
+Build:
+- connect all loops
+- user turn -> LLM -> TTS -> playback
+Acceptance:
+One full real call works.
+
+Phase 13: Interruption end-to-end
+Build:
+- Vobiz clear_playback
+- TTS cancel
+- LLM cancel
+- stale chunk drop
+Acceptance:
+User interrupts long answer and old audio stops.
+
+Phase 14: PlaybackTracker + context truncation
+Build:
+- checkpoint tracking
+- heard text estimation
+- interrupted assistant context
+Acceptance:
+LLM history contains heard text, not full unspoken response.
+
+Phase 15: Storage + metrics
+Build:
+- Redis live state
+- Postgres final save
+- call logs
+- latency summary
+Acceptance:
+Call record saved after hangup.
+
+Phase 16: Sarvam adapters 
+Build:
+- Sarvam STT
+- Sarvam TTS
+Acceptance:
+Provider swap works with config only.
+
+Phase 17: Real testing and tuning
+Build:
+- scripts
+- test cases
+- thresholds
+Acceptance:
+20+ real calls pass.
+
+Rule:
+Do not move to next phase until acceptance passes.

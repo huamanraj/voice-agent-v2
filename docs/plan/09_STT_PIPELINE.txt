@@ -1,0 +1,125 @@
+09 STT PIPELINE
+===============
+
+Purpose:
+Convert caller audio into transcripts and speech events.
+
+Providers:
+- Deepgram primary
+- Sarvam optional Hindi/Hinglish test or backup
+- Mock for tests
+
+Files:
+src/voice_agent/providers/stt/deepgram.py
+src/voice_agent/providers/stt/sarvam.py
+src/voice_agent/providers/stt/mock.py
+
+STTPort methods:
+- start(call_id, language_hint)
+- send_audio(AudioFrame)
+- transcripts()
+- update_language_hint(language)
+- stop()
+
+Deepgram plan:
+WebSocket:
+wss://api.deepgram.com/v1/listen
+
+Recommended params:
+model=nova-3
+encoding=mulaw
+sample_rate=8000
+channels=1
+interim_results=true
+vad_events=true
+smart_format=true
+endpointing=100 or 300
+utterance_end_ms=1000
+language=multi for Hindi/Hinglish testing
+
+KeepAlive:
+Send text frame every 3 seconds:
+{"type": "KeepAlive"}
+
+Important:
+KeepAlive must be text frame, not audio/binary.
+
+Deepgram events to handle:
+- Results
+- SpeechStarted
+- UtteranceEnd
+- Metadata
+- Error/close
+
+Results handling:
+- parse transcript text
+- parse is_final
+- parse speech_final if available
+- parse confidence if available
+- parse language if available
+- emit TranscriptEvent
+
+SpeechStarted handling:
+- emit SpeechStart source=STT
+- still keep local VAD because provider VAD may be delayed or different
+
+UtteranceEnd handling:
+- treat as signal, not final decision
+- TurnManager decides final turn completion
+
+Reconnect:
+- on transient close/error, reconnect with backoff:
+  200 ms, 500 ms, 1000 ms
+- buffer up to 2 seconds audio during reconnect
+- if reconnect fails, emit ProviderError
+
+Sarvam plan:
+Use when Hindi/Hinglish accuracy is priority.
+Mode:
+saaras:v3, codemix if available.
+
+Audio:
+Sarvam may need WAV/raw PCM.
+If Vobiz gives mulaw:
+mulaw 8k -> PCM16 8k -> Sarvam.
+
+Enable VAD signals if supported.
+Use provider VAD as extra signal, not only signal.
+
+Turn decision rule:
+Never use STT final alone.
+Use:
+STT final/interim
++ local VAD
++ Smart-Turn
++ silence timer
+
+Transcript stabilization:
+Interim text may change.
+Do not commit interim to conversation history.
+Use interim only for:
+- interruption candidate text
+- live UI/debug logs
+- faster keyword detection
+
+Final transcript:
+Use for:
+- UserTurnFinal
+- LLM input
+- call transcript
+
+Accuracy logging:
+Log:
+- first interim latency
+- final latency
+- transcript text
+- confidence
+- provider
+- language
+- reconnects
+
+Acceptance:
+- 30 seconds silence does not drop Deepgram due to missing KeepAlive.
+- Hindi/English/Hinglish sample audio transcribes well.
+- STT reconnect works or fails gracefully.
+- STT final does not directly trigger LLM without TurnManager decision.

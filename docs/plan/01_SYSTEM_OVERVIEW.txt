@@ -1,0 +1,118 @@
+01 SYSTEM OVERVIEW
+==================
+
+Purpose:
+Explain the complete voice agent system at a high level.
+
+One call flow:
+Caller phone
+-> Vobiz Streaming WebSocket
+-> FastAPI WebSocket endpoint
+-> Telephony adapter
+-> Audio router
+-> STT + VAD + rolling buffer
+-> Turn manager
+-> LLM
+-> TTS
+-> Output gate
+-> Telephony playback
+-> Playback tracker
+-> Logs + metrics + storage
+
+Core modules:
+1. SessionOrchestrator
+   Main runtime controller for one active call.
+
+2. AudioRouter
+   Receives inbound telephony audio and sends it to STT, VAD, and rolling buffer.
+
+3. TurnManager
+   Decides when the user has finished speaking.
+
+4. InterruptionManager
+   Decides whether user speech during AI playback is a real interruption.
+
+5. SequenceManager
+   Creates and invalidates response sequence IDs.
+
+6. OutputGate
+   Allows, waits, or blocks outbound audio chunks.
+
+7. PlaybackTracker
+   Tracks what assistant audio was sent and likely heard.
+
+8. LatencyTracker
+   Measures STT, LLM, TTS, interruption, and voice-to-voice latency.
+
+9. ContextManager
+   Builds LLM context and handles interrupted assistant turns.
+
+10. Provider adapters
+   Hide external provider APIs from the core.
+
+Main async loops per call:
+- telephony receive loop
+- STT sender loop
+- STT receiver loop
+- VAD processor loop
+- turn decision loop
+- interruption event loop
+- LLM streaming loop when active
+- TTS streaming loop when active
+- telephony sender loop
+- playback event loop
+- logging/metrics loop
+
+Core requirements:
+- Audio path must never be blocked by LLM/TTS/database writes.
+- Queues must be bounded.
+- Every task must be cancellable.
+- Every event must include call_id.
+- Every assistant response must include sequence_id.
+- Old sequence IDs must be invalidated after interruption.
+- Provider-specific details must stay inside adapters.
+
+High-level data flow:
+INBOUND AUDIO:
+Vobiz media event
+-> base64 decode
+-> AudioFrame
+-> STT path
+-> VAD path
+-> RollingAudioBuffer
+
+USER TURN:
+STT transcript + VAD stop + Smart-Turn
+-> TurnManager
+-> UserTurnFinal
+-> SessionOrchestrator
+
+ASSISTANT RESPONSE:
+UserTurnFinal
+-> LLM stream
+-> SentenceAggregator
+-> TTS stream
+-> OutputGate
+-> Telephony send_audio
+-> checkpoint
+
+INTERRUPTION:
+SpeechStart while AI speaking
+-> Interruption candidate
+-> min words / force phrase / speech duration check
+-> confirmed interruption
+-> clear playback
+-> cancel TTS
+-> cancel LLM
+-> invalidate sequence
+-> continue listening
+
+Success definition:
+A good call means:
+- Caller feels heard.
+- Agent does not talk over the caller.
+- Agent stops when caller interrupts.
+- Old audio never continues after interruption.
+- Agent asks short clear questions.
+- Hindi/Hinglish is handled naturally.
+- Logs explain every important decision.

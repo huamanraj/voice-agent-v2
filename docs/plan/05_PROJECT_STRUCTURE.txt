@@ -1,0 +1,193 @@
+05 PROJECT STRUCTURE
+====================
+
+Purpose:
+Give an implementation-ready folder structure.
+
+Root:
+voice_agent/
+- pyproject.toml
+- uv.lock
+- .env.example
+- README.md
+- models/
+- logs/
+- scripts/
+- src/
+- tests/
+
+Recommended tree:
+
+voice_agent/
+  pyproject.toml
+  uv.lock
+  .env.example
+  README.md
+
+  models/
+    silero_vad.onnx
+    smart_turn_v3.onnx
+
+  logs/
+    YYYY-MM-DD/
+      call_id.log
+
+  scripts/
+    download_models.py
+    vobiz_echo_test.py
+    stt_smoke.py
+    tts_smoke.py
+    interruption_smoke.py
+    full_call_simulation.py
+
+  src/voice_agent/
+    __init__.py
+    main.py
+    config.py
+
+    api/
+      __init__.py
+      app.py
+      routes.py
+      ws.py
+      deps.py
+
+    contracts/
+      __init__.py
+      audio.py
+      packets.py
+      events.py
+      ports.py
+      capabilities.py
+      turns.py
+      playback.py
+      errors.py
+
+    factory/
+      __init__.py
+      provider_registry.py
+      session_factory.py
+      config_resolver.py
+
+    core/
+      __init__.py
+      session_orchestrator.py
+      state_machine.py
+
+      queues/
+        __init__.py
+        queue_manager.py
+        backpressure.py
+
+      turn_detection/
+        __init__.py
+        turn_manager.py
+        smart_turn_runner.py
+        rules.py
+        expected_answer.py
+
+      interruption/
+        __init__.py
+        interruption_manager.py
+        output_gate.py
+        sequence_manager.py
+        phrase_classifier.py
+
+      playback/
+        __init__.py
+        playback_tracker.py
+
+      response/
+        __init__.py
+        sentence_aggregator.py
+        output_loop.py
+
+      context/
+        __init__.py
+        context_manager.py
+        summarizer.py
+        slots.py
+
+      metrics/
+        __init__.py
+        latency_tracker.py
+
+      observability/
+        __init__.py
+        call_logger.py
+
+    audio/
+      __init__.py
+      audio_router.py
+      converter.py
+      rolling_buffer.py
+      resample.py
+      chunker.py
+
+    providers/
+      telephony/
+        __init__.py
+        vobiz.py
+        mock.py
+
+      stt/
+        __init__.py
+        deepgram.py
+        sarvam.py
+        mock.py
+
+      tts/
+        __init__.py
+        cartesia.py
+        sarvam.py
+        mock.py
+
+      llm/
+        __init__.py
+        litellm.py
+        mock.py
+
+      storage/
+        __init__.py
+        redis_live_store.py
+        postgres_final_store.py
+        memory_store.py
+
+      observability/
+        __init__.py
+        file_logger.py
+        noop_logger.py
+
+    persistence/
+      schema.sql
+      migrations/
+
+  tests/
+    contracts/
+      test_ports.py
+
+    core/
+      test_turn_manager.py
+      test_interruption_manager.py
+      test_output_gate.py
+      test_sequence_manager.py
+      test_playback_tracker.py
+
+    providers/
+      test_vobiz_adapter.py
+      test_deepgram_adapter.py
+      test_cartesia_adapter.py
+
+    simulation/
+      test_full_call_mock.py
+      test_barge_in_cases.py
+      test_turn_detection_cases.py
+
+Important structure rule:
+Provider code can import contracts.
+Core code cannot import providers.
+
+Acceptance:
+- uv run python -c "import voice_agent" succeeds.
+- Core tests run with mock providers.
+- Provider adapters are optional and isolated.

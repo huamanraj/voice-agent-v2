@@ -1,0 +1,100 @@
+14 PLAYBACK TRACKING AND CONTEXT
+================================
+
+Purpose:
+Track what assistant audio was actually heard by the caller and keep conversation history accurate.
+
+Files:
+src/voice_agent/core/playback/playback_tracker.py
+src/voice_agent/core/context/context_manager.py
+
+Why:
+The assistant may generate a full sentence, but the user may interrupt halfway.
+Do not store the full assistant answer as if the user heard it.
+
+Example:
+Generated:
+"Your appointment is confirmed for tomorrow at 5 PM, and I will send a message."
+
+User heard:
+"Your appointment is confirmed for tomorrow..."
+
+Store:
+assistant_heard_by_user="Your appointment is confirmed for tomorrow..."
+assistant_full_generated="Your appointment is confirmed for tomorrow at 5 PM, and I will send a message."
+interrupted=True
+
+PlaybackTracker state:
+MessagePlayback:
+- call_id
+- message_id
+- sequence_id
+- full_text
+- text_sent_to_tts
+- audio_chunks_sent
+- audio_ms_sent
+- checkpoints_sent
+- checkpoints_played
+- cleared
+- interrupted
+- started_ms
+- fully_played_ms
+- word_timestamps
+
+Vobiz checkpoint:
+After response:
+send checkpoint with message_id.
+When playedStream returns:
+mark checkpoint_played.
+If clearAudio happens:
+mark cleared and interrupted.
+
+Heard text estimation:
+Best:
+TTS word timestamps + playback checkpoint/played timing.
+
+Fallback:
+audio_ms_sent / total_audio_ms ratio.
+
+Pseudo:
+for word in word_timestamps:
+    if word.end_ms <= played_audio_ms:
+        include word
+
+If no word timestamps:
+heard_chars = int(len(text) * played_audio_ms / total_audio_ms)
+
+ContextManager:
+Builds LLM history from:
+- system prompt
+- summary
+- recent user turns
+- recent assistant turns
+- interrupted assistant partial text
+- slots/memory if enabled
+
+Interrupted assistant rule:
+If interrupted:
+history assistant content = partial heard text + "[interrupted]"
+not full generated text.
+
+Turn records:
+User turn:
+- text
+- timestamp
+- confidence
+- language
+
+Assistant turn:
+- full_text
+- heard_text
+- interrupted
+- latency
+- message_id
+- sequence_id
+
+Acceptance:
+- playedStream marks message as heard.
+- clearAudio marks current message interrupted.
+- LLM context does not include unspoken full response.
+- Logs show generated vs heard text.

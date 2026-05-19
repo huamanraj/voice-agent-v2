@@ -1,0 +1,162 @@
+11 INTERRUPTION MANAGER
+=======================
+
+Purpose:
+Stop AI safely when caller intentionally speaks during AI audio.
+
+Files:
+src/voice_agent/core/interruption/interruption_manager.py
+src/voice_agent/core/interruption/output_gate.py
+src/voice_agent/core/interruption/sequence_manager.py
+src/voice_agent/core/interruption/phrase_classifier.py
+
+Core idea:
+Interruption is not just stop current audio.
+It must also invalidate all old future chunks.
+
+Interruption components:
+1. OutputGate
+2. SequenceManager
+3. PhraseClassifier
+4. InterruptionManager
+5. PlaybackTracker
+6. Telephony clear_playback
+7. TTS cancel
+8. LLM cancel
+
+OutputGate states:
+SEND:
+  send audio normally
+
+WAIT:
+  user may be speaking; hold old audio briefly
+
+BLOCK:
+  interruption confirmed; drop old audio forever
+
+SequenceManager:
+- creates sequence_id for every assistant response
+- validates chunks
+- invalidates pending IDs on interruption
+
+PhraseClassifier:
+Force interrupt phrases:
+- stop
+- wait
+- ruk
+- ruko
+- ruk jao
+- ek minute
+- nahi
+- no
+- wrong
+- galat
+- suno
+
+Backchannel phrases:
+- haan
+- hmm
+- okay
+- ji
+- achha
+- theek hai
+- yes
+- right
+
+Two-stage interruption:
+Stage 1: soft candidate
+Triggered by:
+SpeechStart while agent is speaking
+
+Actions:
+- set user_may_be_interrupting=True
+- set OutputGate=WAIT
+- stop sending new chunks temporarily
+- do not cancel LLM yet
+- do not cancel TTS yet
+- optionally preemptive clear if configured
+
+Stage 2: hard confirmed
+Triggered by:
+- force phrase
+- word count >= min_interrupt_words
+- speech duration >= hard_interrupt_after_audio_ms with transcript
+- clear real speech signal
+
+Actions:
+- OutputGate=BLOCK
+- SequenceManager.invalidate_pending()
+- cancel active LLM response
+- cancel active TTS message/context
+- telephony.clear_playback(reason="interruption")
+- mark current assistant message interrupted
+- continue collecting user turn
+
+Interruption decision:
+Can confirm only if:
+1. interruption enabled
+2. agent_is_speaking or telephony has buffered audio
+3. user started speaking
+4. not backchannel
+5. force phrase OR enough words OR long enough speech
+
+Pseudo:
+if not enabled: reject
+if not agent_is_speaking: reject
+if no user_interrupt_start_ms: reject
+
+decision = phrase_classifier.decide(text)
+audio_ms = now - user_interrupt_start_ms
+
+if decision.is_backchannel:
+    reject "backchannel_phrase"
+
+if decision.is_force_interrupt:
+    confirm "force_interrupt_phrase"
+
+if decision.word_count >= min_interrupt_words:
+    confirm "word_count_threshold"
+
+if audio_ms >= hard_interrupt_after_audio_ms and word_count > 0:
+    confirm "long_user_speech"
+
+else reject/pending "not_enough_words"
+
+False interruption handling:
+If user says "haan", "hmm", "okay", "ji":
+- do not cancel LLM
+- do not cancel TTS
+- do not clear playback
+- set OutputGate=SEND
+- continue current response
+- log interruption_rejected
+
+Confirmed interruption handler:
+1. state -> INTERRUPTING
+2. output_gate.invalidate_pending()
+3. sequence_manager.invalidate_pending()
+4. llm.cancel(current_response_id)
+5. tts.cancel(current_message_id)
+6. telephony.clear_playback()
+7. playback_tracker.mark_current_interrupted()
+8. log interruption_confirmed
+9. state -> USER_SPEAKING
+
+Important:
+Even if TTS cancel fails, OutputGate and sequence invalidation must protect the caller.
+Never allow stale chunk by old sequence_id.
+
+Vobiz:
+Core calls telephony.clear_playback().
+Vobiz adapter sends clearAudio.
+Core does not know clearAudio JSON.
+
+Acceptance:
+- "wait" stops AI fast.
+- "ruk jao" stops AI fast.
+- "haan" does not stop AI during explanation.
+- 3+ word user speech interrupts.
+- Cough/noise does not interrupt.
+- Old TTS chunks after cancel are dropped.
+- Old LLM tokens after cancel are ignored.
+- clear_playback is called on confirmed interruption.

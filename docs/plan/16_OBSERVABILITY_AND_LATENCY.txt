@@ -1,0 +1,126 @@
+16 OBSERVABILITY AND LATENCY
+============================
+
+Purpose:
+Make call issues debuggable.
+
+Files:
+src/voice_agent/core/observability/call_logger.py
+src/voice_agent/core/metrics/latency_tracker.py
+
+Structured logs:
+Every event should include:
+- call_id
+- turn_id
+- sequence_id
+- message_id
+- provider
+- event_name
+- timestamp_ms
+- state
+- details
+
+Required log events:
+- call_started
+- provider_connected
+- vobiz_start
+- media_first_frame
+- speech_start
+- speech_stop
+- interim_transcript
+- final_transcript
+- smart_turn_result
+- user_turn_final
+- agent_response_started
+- llm_start
+- llm_first_token
+- llm_end
+- tts_start
+- tts_first_audio
+- tts_end
+- play_audio_sent
+- checkpoint_sent
+- checkpoint_played
+- interruption_candidate_started
+- interruption_confirmed
+- interruption_rejected
+- sequence_invalidated
+- tts_cancel_sent
+- llm_cancel_sent
+- clear_playback_sent
+- clear_playback_ack
+- old_audio_chunk_dropped
+- agent_interrupted_user
+- provider_error
+- call_ended
+
+Latency fields:
+TurnLatency:
+- user_speech_start_ms
+- first_interim_ms
+- first_final_ms
+- user_speech_end_ms
+- end_of_turn_decision_ms
+- llm_request_start_ms
+- llm_first_token_ms
+- llm_stream_end_ms
+- tts_request_start_ms
+- tts_first_audio_ms
+- tts_stream_end_ms
+- first_audio_sent_ms
+- first_audio_played_ms
+- final_audio_played_ms
+- interruption_start_ms
+- playback_clear_sent_ms
+- playback_clear_ack_ms
+
+Metrics:
+STT first interim latency:
+first_interim_ms - user_speech_start_ms
+
+STT final latency:
+first_final_ms - user_speech_end_ms
+
+End-of-turn delay:
+end_of_turn_decision_ms - user_speech_end_ms
+
+LLM TTFT:
+llm_first_token_ms - llm_request_start_ms
+
+TTS first audio:
+tts_first_audio_ms - tts_request_start_ms
+
+Voice-to-voice:
+first_audio_sent_ms - user_speech_end_ms
+
+Barge-in clear latency:
+playback_clear_sent_ms - interruption_start_ms
+
+Clear ack latency:
+playback_clear_ack_ms - playback_clear_sent_ms
+
+Targets:
+- STT first interim < 300 to 500 ms
+- End-of-turn decision 350 to 900 ms
+- LLM first token < 800 ms
+- TTS first audio < 500 ms
+- Voice-to-voice < 1.8 sec first version
+- Interruption clear sent < 150 ms after confirmed interruption
+- Old audio after interruption < 300 ms ideally
+
+Log file:
+logs/YYYY-MM-DD/{call_id}.log
+
+Optional:
+also emit JSONL logs:
+logs/YYYY-MM-DD/{call_id}.jsonl
+
+Why JSONL:
+Easy to parse and graph later.
+
+Acceptance:
+- Every call has readable log.
+- Every interruption can be reconstructed from logs.
+- Latency summary printed after call.
+- Dropped stale chunks are counted.
+- Provider errors are mapped and logged.

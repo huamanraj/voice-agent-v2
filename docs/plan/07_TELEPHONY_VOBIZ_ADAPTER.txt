@@ -1,0 +1,129 @@
+07 TELEPHONY VOBIZ ADAPTER
+==========================
+
+Purpose:
+Implement Vobiz Streaming WebSocket as a TelephonyPort.
+
+File:
+src/voice_agent/providers/telephony/vobiz.py
+
+Core responsibility:
+Convert Vobiz JSON events into internal AudioFrame/PlaybackEvent.
+Convert internal send_audio/clear_playback/checkpoint into Vobiz JSON events.
+
+Vobiz inbound events:
+- start
+- media
+- playedStream
+- clearedAudio
+- stop / websocket close
+
+Vobiz outbound events:
+- playAudio
+- clearAudio
+- checkpoint
+- stop
+
+Do not assume raw binary frames.
+Vobiz audio events are JSON with base64 payload.
+
+start event handling:
+- parse callId
+- parse streamId
+- parse mediaFormat
+- store call_id and stream_id
+- set codec/sample rate
+- emit call_started log
+
+media event handling:
+- get media.payload
+- base64 decode
+- create AudioFrame:
+  - call_id
+  - data
+  - codec=mulaw_8k if audio/x-mulaw
+  - sample_rate=8000
+  - channels=1
+  - sequence from media.chunk or local counter
+  - track=inbound
+- push frame to core receive_audio stream
+
+playAudio:
+Input:
+AudioFrame with outbound audio.
+
+Adapter:
+- ensure codec is Vobiz-compatible
+- if needed convert to mulaw_8k before adapter call, preferably in AudioRouter/Converter
+- split into 20 ms chunks if not already chunked
+- base64 encode each chunk
+- send JSON:
+  {
+    "event": "playAudio",
+    "media": {
+      "contentType": "audio/x-mulaw",
+      "sampleRate": 8000,
+      "payload": "base64..."
+    }
+  }
+
+Chunking:
+For mulaw 8k:
+20 ms = 160 bytes.
+Do not send giant chunks.
+Small chunks make interruption faster.
+
+clear_playback:
+Core calls:
+await telephony.clear_playback(reason="interruption")
+
+Vobiz adapter sends:
+{
+  "event": "clearAudio",
+  "streamId": "<stream_id>"
+}
+
+Then wait for clearedAudio if available.
+Do not block forever.
+Use timeout like 500 ms.
+
+checkpoint:
+After assistant response audio is sent:
+{
+  "event": "checkpoint",
+  "streamId": "<stream_id>",
+  "name": "<message_id or checkpoint_id>"
+}
+
+When Vobiz sends playedStream:
+- create PlaybackEvent event_type=checkpoint_played
+- update PlaybackTracker
+
+WebSocket close:
+Treat as call ended even if no stop event.
+Emit HangupEvent.
+Cancel session tasks.
+
+Security:
+- validate token/query/header if used
+- reject unknown or missing token
+- log call_id and stream_id
+- never log API secrets
+
+Adapter internal tasks:
+- receiver task
+- sender task optional if using outbound queue
+- playback event queue
+
+Important:
+clearAudio is provider-specific, but core should only call clear_playback.
+If later Twilio is used, TwilioAdapter implements the same method differently.
+
+Acceptance:
+- Receives Vobiz start event.
+- Decodes media payload.
+- Sends playAudio that is heard on phone.
+- Sends checkpoint and receives playedStream.
+- Sends clearAudio and receives clearedAudio.
+- WebSocket close ends call safely.
+- Core does not know Vobiz JSON structure.

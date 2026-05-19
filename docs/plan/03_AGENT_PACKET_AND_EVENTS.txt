@@ -1,0 +1,139 @@
+03 AGENT PACKET AND EVENTS
+==========================
+
+Purpose:
+Use a standard message envelope across queues.
+This keeps the pipeline clean and easy to debug.
+
+File:
+src/voice_agent/contracts/packets.py
+
+AgentPacket fields:
+- packet_type
+- call_id
+- turn_id
+- sequence_id
+- request_id
+- timestamp_ms
+- data
+- meta
+- eos
+
+Example:
+
+@dataclass
+class AgentPacket:
+    packet_type: str
+    call_id: str
+    turn_id: int | None
+    sequence_id: int | None
+    request_id: str | None
+    timestamp_ms: int
+    data: dict
+    meta: dict
+    eos: bool = False
+
+packet_type examples:
+- audio_frame
+- transcript_interim
+- transcript_final
+- speech_start
+- speech_stop
+- smart_turn_result
+- user_turn_final
+- llm_token
+- llm_sentence
+- tts_audio_chunk
+- playback_event
+- interruption_started
+- interruption_rejected
+- error
+- eos
+
+Why packet envelope is useful:
+- Same metadata travels through audio -> STT -> LLM -> TTS -> output.
+- sequence_id can be checked everywhere.
+- latency can be measured from packet timestamps.
+- logs become easier to understand.
+- EOS can shut down consumers cleanly.
+
+Core event types:
+File:
+src/voice_agent/contracts/events.py
+
+Events:
+SpeechStart
+SpeechStop
+TranscriptEvent
+SmartTurnResult
+UserTurnFinal
+InterruptionStarted
+InterruptionRejected
+PlaybackEvent
+ProviderError
+HangupEvent
+
+SpeechStart:
+- call_id
+- ts_ms
+- source: vad/stt/telephony
+- confidence
+
+TranscriptEvent:
+- call_id
+- text
+- is_final
+- confidence
+- language
+- start_ms
+- end_ms
+- provider
+- asr_turn_id
+
+UserTurnFinal:
+- call_id
+- turn_id
+- text
+- language
+- confidence
+- start_ms
+- end_ms
+
+InterruptionStarted:
+- call_id
+- turn_id
+- sequence_id
+- reason
+- transcript
+- ts_ms
+
+PlaybackEvent:
+- call_id
+- message_id
+- sequence_id
+- checkpoint_id
+- event_type: started/checkpoint_played/fully_played/cleared
+- ts_ms
+
+ProviderError:
+- call_id
+- provider
+- error_type
+- error_code
+- message
+- retryable
+
+EOS:
+Every long-running queue consumer must handle EOS packet.
+
+EOS rules:
+- Producer sends eos=True when it is done.
+- Consumer stops gracefully.
+- Shutdown sends EOS to all major queues before task cancellation if possible.
+- If provider disconnects suddenly, emit ProviderError + EOS.
+
+Acceptance:
+- Every packet has call_id.
+- Every LLM/TTS/audio packet has sequence_id.
+- Output loop drops packets with invalid sequence_id.
+- EOS shuts down tests without hanging.

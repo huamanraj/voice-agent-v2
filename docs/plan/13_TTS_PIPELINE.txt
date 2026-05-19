@@ -1,0 +1,103 @@
+13 TTS PIPELINE
+===============
+
+Purpose:
+Turn LLM text into low-latency telephony audio.
+
+Providers:
+- Cartesia Sonic 3.5 primary
+- Sarvam Bulbul v3 optional backup
+- Mock for tests
+
+Files:
+src/voice_agent/providers/tts/cartesia.py
+src/voice_agent/providers/tts/sarvam.py
+src/voice_agent/providers/tts/mock.py
+src/voice_agent/core/response/output_loop.py
+
+TTSPort:
+- start(call_id, voice, language)
+- synthesize(text, message_id, sequence_id)
+- cancel(message_id, reason)
+- stop()
+
+Cartesia plan:
+Use one context_id per assistant response or per message chunk depending provider behavior.
+Preferred:
+one assistant response = one context_id
+message_id maps to context_id.
+
+Output format:
+- raw
+- pcm_mulaw
+- 8000 Hz
+- mono
+
+If pcm_mulaw unavailable:
+- request PCM 8k
+- convert to mulaw 8k before Vobiz playback
+
+Cartesia chunk metadata:
+Every chunk must include:
+- call_id
+- message_id
+- sequence_id
+- context_id
+- audio bytes
+- timestamp
+- is_final optional
+- word timestamps if available
+
+Cancel:
+On interruption:
+tts.cancel(message_id)
+Adapter maps message_id -> provider context_id.
+Send provider cancel message.
+Late chunks can still arrive.
+OutputGate must drop them.
+
+Sarvam TTS plan:
+Use Bulbul v3.
+Request:
+- output_audio_codec=mulaw
+- output_sample_rate=8000
+- word_timestamps if supported
+- completion event
+
+Voice selection:
+Hindi: manisha, pooja, aditya, kabir
+English India: anushka, arvind
+
+TTS first audio target:
+< 500 ms
+
+TTS stream flow:
+Sentence from LLM
+-> TTS synthesize
+-> audio chunks
+-> tts_audio_queue
+-> OutputGate
+-> Telephony
+
+Chunking:
+TTS provider may return variable chunks.
+Before telephony, normalize to 20 ms chunks if needed.
+
+Caching:
+Cache hot phrases:
+- greetings
+- fillers
+- repeated questions
+- goodbye
+Key:
+(text, voice, language, provider)
+
+Cache should not break interruption.
+Cached audio still needs sequence_id validation.
+
+Acceptance:
+- First audio arrives fast.
+- TTS cancel is called on interruption.
+- Late chunks after cancel are dropped.
+- Audio plays correctly on phone.
+- Word timestamps are stored when available.

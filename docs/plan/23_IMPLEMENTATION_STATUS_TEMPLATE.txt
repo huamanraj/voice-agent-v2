@@ -1,0 +1,96 @@
+23 IMPLEMENTATION STATUS TEMPLATE
+=================================
+
+Use this file to track progress.
+
+Phase 0 Project setup:
+[ ] pyproject.toml
+[ ] src package
+[ ] config
+[ ] .env.example
+[ ] import test passes
+
+Phase 1 Contracts:
+[ ] AudioFrame
+[ ] AgentPacket
+[ ] Events
+[ ] Ports
+[ ] Capabilities
+[ ] Errors
+
+Phase 2 Mock providers:
+[ ] MockTelephony
+[ ] MockSTT
+[ ] MockTTS
+[ ] MockLLM
+[ ] MemoryStore
+
+Phase 3 Session skeleton:
+[ ] QueueManager
+[ ] StateMachine
+[ ] SessionOrchestrator
+[ ] startup/shutdown
+[ ] EOS
+
+Phase 4 Interruption core:
+[ ] SequenceManager
+[ ] OutputGate
+[ ] PhraseClassifier
+[ ] InterruptionManager
+
+Phase 5 Turn detection:
+[ ] TurnManager
+[ ] ExpectedAnswer
+[ ] SmartTurnRunner
+[ ] Hinglish rules
+
+Phase 6 Audio:
+[ ] Converter
+[ ] Chunker
+[ ] RollingBuffer
+[ ] AudioRouter
+
+Phase 7 Vobiz:
+[ ] start
+[ ] media
+[ ] playAudio
+[ ] checkpoint
+[ ] playedStream
+[ ] clearAudio
+[ ] clearedAudio
+
+Phase 8 STT:
+[ ] Deepgram connect
+[ ] KeepAlive
+[ ] transcripts
+[ ] reconnect
+
+Phase 9 TTS:
+[ ] Cartesia connect
+[ ] synthesize
+[ ] cancel
+[ ] chunk metadata
+
+Phase 10 LLM:
+[ ] streaming
+[ ] cancel
+[ ] sentence aggregation
+[ ] listener JSON optional
+
+Phase 11 End-to-end:
+[ ] normal call
+[ ] interruption
+[ ] backchannel
+[ ] hangup
+
+Phase 12 Persistence:
+[ ] Redis
+[ ] Postgres
+[ ] logs
+[ ] metrics
+
+Phase 13 Testing:
+[ ] unit tests
+[ ] simulation tests
+[ ] provider smoke tests
+[ ] real calls

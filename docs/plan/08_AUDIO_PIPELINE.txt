@@ -1,0 +1,102 @@
+08 AUDIO PIPELINE
+=================
+
+Purpose:
+Centralize audio conversion, chunking, routing, and rolling buffer.
+
+Files:
+src/voice_agent/audio/audio_router.py
+src/voice_agent/audio/converter.py
+src/voice_agent/audio/rolling_buffer.py
+src/voice_agent/audio/chunker.py
+src/voice_agent/audio/resample.py
+
+AudioFrame:
+- call_id
+- data
+- codec
+- sample_rate
+- channels
+- timestamp_ms
+- sequence
+- track
+
+Supported codecs:
+- mulaw_8k
+- pcm16_8k
+- pcm16_16k
+- opus_16k optional
+
+Inbound path:
+Vobiz media
+-> base64 decode in VobizAdapter
+-> AudioFrame mulaw_8k
+-> AudioRouter
+
+AudioRouter sends:
+1. STT path
+   - Deepgram can accept mulaw_8k
+   - Sarvam may need PCM16 8k
+2. VAD path
+   - convert to PCM16 16k
+3. Rolling buffer
+   - keep last 8 seconds PCM16 16k for Smart-Turn
+
+Converter:
+Responsibilities:
+- mulaw -> pcm16
+- pcm16 -> mulaw
+- 8k -> 16k
+- 16k -> 8k
+- chunk audio into fixed 20 ms frames
+
+Conversion rules:
+- Do not convert separately in every provider.
+- Providers should validate codec, not own all conversion.
+- AudioRouter decides target codec based on provider capabilities.
+
+RollingAudioBuffer:
+- Store last 8 seconds of PCM16 16k.
+- Used by Smart-Turn after SpeechStop.
+- Must be per-call.
+- Must be memory bounded.
+
+Chunker:
+For mulaw 8k:
+20 ms = 160 bytes.
+For pcm16 8k:
+20 ms = 320 bytes.
+For pcm16 16k:
+20 ms = 640 bytes.
+
+Outbound TTS path:
+TTS audio
+-> ensure mulaw_8k
+-> chunk to 20 ms
+-> OutputGate
+-> TelephonyPort.send_audio
+
+Why not large chunks:
+Large chunks increase barge-in delay.
+If 3 seconds of audio is already sent to telephony, clearAudio may still need to clear a big buffer.
+Use small chunks to keep playback controllable.
+
+VAD:
+- Input: PCM16 16k.
+- Output: SpeechStart/SpeechStop.
+- Should run quickly.
+- Use hysteresis to avoid flickering.
+
+Smart-Turn:
+- Input: last 8 seconds PCM16 16k.
+- Run after VAD SpeechStop or STT final.
+- Output: is_complete + confidence.
+
+Acceptance:
+- Audio sent to phone is not robotic.
+- Sample rates are correct.
+- Deepgram receives correct codec.
+- Sarvam receives correct codec if used.
+- VAD receives PCM16 16k.
+- Smart-Turn receives last 8 seconds audio.
+- Output chunks are 20 ms.

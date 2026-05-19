@@ -1,0 +1,78 @@
+17 ASSISTANT MANAGER AND POST-CALL TASKS
+========================================
+
+Purpose:
+Add Bolna-style higher-level task orchestration without mixing it into the live audio loop.
+
+AssistantManager:
+Controls task sequence for one call or one agent workflow.
+
+Task types:
+1. conversation
+2. extraction
+3. summarization
+4. webhook
+5. notification
+6. CRM update
+
+Live conversation task:
+Runs SessionOrchestrator.
+
+Post-call extraction task:
+Extracts:
+- customer name
+- issue
+- interest level
+- callback time
+- order number
+- sentiment
+- escalation needed
+
+Post-call summary task:
+Creates:
+- short summary
+- key points
+- next action
+- call outcome
+
+Webhook task:
+Sends data to external system:
+- CRM
+- dashboard
+- Google Sheet
+- internal API
+
+Important:
+Post-call tasks must not block live audio.
+Run after call ends or in background worker.
+
+AssistantManager flow:
+1. Receive inbound call.
+2. Load agent config.
+3. Start conversation task.
+4. On call end, collect transcript/metrics.
+5. Run extraction task.
+6. Run summarization task.
+7. Save results.
+8. Send webhook if configured.
+
+Files:
+src/voice_agent/core/assistant_manager.py optional
+src/voice_agent/core/tasks/conversation_task.py
+src/voice_agent/core/tasks/extraction_task.py
+src/voice_agent/core/tasks/summarization_task.py
+src/voice_agent/core/tasks/webhook_task.py
+
+When to build:
+Not required for first call MVP.
+Add after core call pipeline works.
+
+Why useful:
+- Keeps live call clean.
+- Adds business workflow later.
+- Allows multiple agent tasks without changing SessionOrchestrator.
+
+Acceptance:
+- Conversation works without AssistantManager.
+- Post-call tasks run after hangup.
+- Webhook failure does not affect call.

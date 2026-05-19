@@ -1,0 +1,146 @@
+06 CONFIGURATION
+================
+
+Purpose:
+Define environment and agent-level settings.
+
+File:
+src/voice_agent/config.py
+
+Use pydantic-settings.
+
+Required API keys:
+- VOBIZ_AUTH_TOKEN optional depending integration
+- DEEPGRAM_API_KEY
+- SARVAM_API_KEY optional
+- CARTESIA_API_KEY
+- LLM provider keys used by LiteLLM (e.g. GROQ_API_KEY or OPENAI_API_KEY)
+
+Runtime config:
+APP_ENV=development
+API_HOST=0.0.0.0
+API_PORT=8080
+PUBLIC_WS_BASE_URL=wss://your-domain.com
+
+Provider config:
+TELEPHONY_PROVIDER=vobiz
+STT_PROVIDER=deepgram
+TTS_PROVIDER=cartesia
+LLM_PROVIDER=litellm
+LIVE_STORE_PROVIDER=redis
+FINAL_STORE_PROVIDER=postgres
+LOGGER_PROVIDER=file
+
+Storage:
+REDIS_URL=redis://localhost:6379/0
+POSTGRES_DSN=postgresql://user:pass@localhost:5432/voice_agent
+
+Concurrency:
+MAX_CONCURRENT_CALLS_PER_WORKER=5
+QUEUE_AUDIO_IN_MAX=100
+QUEUE_TTS_OUT_MAX=200
+SHUTDOWN_GRACE_SECONDS=10
+
+Audio:
+TELEPHONY_CODEC=mulaw_8k
+TELEPHONY_SAMPLE_RATE=8000
+OUTBOUND_CHUNK_MS=20
+
+TurnConfig:
+vad_enabled=True
+vad_start_min_ms=80
+vad_stop_min_ms=350
+vad_confidence_threshold=0.55
+min_user_speech_ms=250
+min_silence_for_turn_end_ms=450
+max_silence_before_force_end_ms=1200
+smart_turn_enabled=True
+smart_turn_threshold=0.65
+end_of_turn_grace_ms=250
+
+InterruptionConfig:
+interruption_enabled=True
+min_interrupt_words=3
+min_interruption_audio_ms=180
+hard_interrupt_after_audio_ms=350
+wait_gate_on_speech_start=True
+clear_audio_on_confirmed_interrupt=True
+preemptive_clear_audio=False
+preemptive_clear_after_ms=220
+allow_interrupt_welcome_message=False
+
+Force interrupt phrases:
+- stop
+- wait
+- ruk
+- ruko
+- ruk jao
+- ek minute
+- ek min
+- nahin
+- nahi
+- no
+- wrong
+- galat
+- suno
+- sun
+
+Backchannel phrases:
+- haan
+- ha
+- hmm
+- hm
+- okay
+- ok
+- ji
+- achha
+- acha
+- theek hai
+- thik hai
+- yes
+- yeah
+- right
+
+LLM:
+TALKER_MODEL=llama-3.3-70b-versatile or gpt-4.1-mini
+LISTENER_MODEL=llama-3.1-8b-instant or gpt-4.1-mini
+LLM_FIRST_TOKEN_TIMEOUT_MS=3000
+LLM_TOTAL_TIMEOUT_MS=15000
+
+STT:
+DEEPGRAM_MODEL=nova-3
+DEEPGRAM_LANGUAGE=multi
+DEEPGRAM_ENDPOINTING_MS=100
+DEEPGRAM_UTTERANCE_END_MS=1000
+DEEPGRAM_KEEPALIVE_SECONDS=3
+
+TTS:
+CARTESIA_MODEL=sonic-3.5
+CARTESIA_OUTPUT_ENCODING=pcm_mulaw
+CARTESIA_SAMPLE_RATE=8000
+TTS_FIRST_AUDIO_TIMEOUT_MS=3000
+
+Logging:
+LOG_DIR=./logs
+LOG_FULL_TRANSCRIPTS=True
+MASK_PHONE_IN_SHARED_LOGS=True
+
+Agent-level config:
+Each agent can override:
+- system_prompt
+- default_language
+- stt_provider
+- tts_provider
+- llm_provider
+- voice_hi
+- voice_en
+- min_interrupt_words
+- force_interrupt_phrases
+- backchannel_phrases
+- expected_answer behavior
+
+Acceptance:
+- Missing required API keys fail clearly.
+- Dev can run with mock providers without external keys.
+- Per-agent provider overrides work.
+- Config object is read-only after startup.
