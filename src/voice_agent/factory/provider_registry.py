@@ -31,10 +31,12 @@ def create_default_registry() -> ProviderRegistry:
     from voice_agent.providers.storage.memory_store import MemoryStore
     from voice_agent.providers.stt.mock import MockSTT
     from voice_agent.providers.telephony.mock import MockTelephony
+    from voice_agent.providers.telephony.vobiz import VobizTelephony
     from voice_agent.providers.tts.mock import MockTTS
 
     registry = ProviderRegistry()
     registry.register("telephony", "mock", MockTelephony)
+    registry.register("telephony", "vobiz", VobizTelephony)
     registry.register("stt", "mock", MockSTT)
     registry.register("tts", "mock", MockTTS)
     registry.register("llm", "mock", MockLLM)

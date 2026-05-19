@@ -45,9 +45,9 @@ class PhraseClassifier:
     def _match_phrase(text: str, phrases: frozenset[str]) -> str | None:
         if not text:
             return None
-        if text in phrases:
-            return text
-        for phrase in phrases:
+        for phrase in sorted(phrases, key=len, reverse=True):
+            if text == phrase:
+                return phrase
             if text.startswith(f"{phrase} "):
                 return phrase
         return None

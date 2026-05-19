@@ -11,6 +11,7 @@ Current build status:
 - Phase 4 complete: sequence creation, invalidation, output gating, and stale audio dropping.
 - Phase 5 complete: turn manager, expected-answer hints, smart-turn heuristic, and Hinglish completion rules.
 - Phase 6 complete: soft/hard interruption decisions, force phrases, backchannels, and cancellation hooks.
+- Phase 7 complete: audio conversion, resampling, 20 ms chunking, routing, and rolling PCM16 16k buffer.
 
 Local setup:
 ```powershell

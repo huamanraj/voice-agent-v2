@@ -32,7 +32,7 @@ def test_mock_providers_satisfy_runtime_ports() -> None:
 def test_default_registry_creates_mock_providers() -> None:
     registry = create_default_registry()
 
-    assert registry.available("telephony") == ("mock",)
+    assert registry.available("telephony") == ("mock", "vobiz")
     assert isinstance(registry.create("telephony", "mock", call_id="call-1"), MockTelephony)
     assert isinstance(registry.create("stt", "mock"), MockSTT)
     assert isinstance(registry.create("tts", "mock"), MockTTS)

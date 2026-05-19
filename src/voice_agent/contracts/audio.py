@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-AudioCodec = Literal["mulaw_8k", "pcm16_8k", "pcm16_16k", "opus_48k"]
+AudioCodec = Literal["mulaw_8k", "pcm16_8k", "pcm16_16k", "opus_16k", "opus_48k"]
 
 
 @dataclass(slots=True)

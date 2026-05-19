@@ -5,6 +5,8 @@ from dataclasses import asdict, dataclass, field
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from voice_agent.audio.audio_router import AudioRouter
+from voice_agent.audio.rolling_buffer import RollingAudioBuffer
 from voice_agent.config import Settings, get_settings
 from voice_agent.contracts.audio import AudioFrame
 from voice_agent.contracts.events import (
@@ -85,6 +87,8 @@ class SessionOrchestrator:
     output_gate: OutputGate = field(init=False)
     interruption_manager: InterruptionManager = field(init=False)
     turn_manager: TurnManager = field(init=False)
+    rolling_audio_buffer: RollingAudioBuffer = field(init=False)
+    audio_router: AudioRouter = field(init=False)
     _shutdown_started: bool = field(init=False)
 
     def __post_init__(self) -> None:
@@ -96,6 +100,12 @@ class SessionOrchestrator:
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.sequence_manager = SequenceManager()
         self.output_gate = OutputGate()
+        self.rolling_audio_buffer = RollingAudioBuffer(call_id=self.call_id)
+        self.audio_router = AudioRouter(
+            call_id=self.call_id,
+            queues=self.queues,
+            rolling_buffer=self.rolling_audio_buffer,
+        )
         self.interruption_manager = InterruptionManager(
             call_id=self.call_id,
             settings=self.settings,
@@ -214,11 +224,7 @@ class SessionOrchestrator:
     async def _receive_audio_loop(self) -> None:
         async for frame in self.providers.telephony.receive_audio():
             self.stats.audio_frames_received += 1
-            packet = self._packet("audio_frame", {"frame": frame})
-            await put_packet(self.queues.telephony_audio_in, packet, BackpressurePolicy.DROP_OLDEST)
-            await put_packet(self.queues.stt_audio, packet, BackpressurePolicy.DROP_OLDEST)
-            await put_packet(self.queues.vad_audio, packet, BackpressurePolicy.DROP_OLDEST)
-            await put_packet(self.queues.rolling_audio, packet, BackpressurePolicy.DROP_OLDEST)
+            await self.audio_router.route_inbound(frame)
 
         for queue in (self.queues.stt_audio, self.queues.vad_audio, self.queues.rolling_audio):
             await put_packet(queue, AgentPacket.eos_packet(self.call_id), BackpressurePolicy.DROP_OLDEST)
