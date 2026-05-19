@@ -53,6 +53,7 @@ class VobizTelephony:
         self._incoming_audio: asyncio.Queue[AudioFrame | None] = asyncio.Queue(queue_maxsize)
         self._playback_events: asyncio.Queue[PlaybackEvent | None] = asyncio.Queue(queue_maxsize)
         self._clear_ack_event = asyncio.Event()
+        self._start_event = asyncio.Event()
         self._receiver_task: asyncio.Task[None] | None = None
         self._finished = False
         self._local_media_sequence = 0
@@ -65,6 +66,13 @@ class VobizTelephony:
             return
         self.started = True
         self._receiver_task = asyncio.create_task(self._receiver_loop())
+
+    async def wait_started(self, timeout_seconds: float) -> bool:
+        if self.stream_id is not None:
+            return True
+        with suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(self._start_event.wait(), timeout_seconds)
+        return self.stream_id is not None and not self._finished
 
     async def receive_audio(self) -> AsyncIterator[AudioFrame]:
         while True:
@@ -239,6 +247,7 @@ class VobizTelephony:
         self._media_codec = codec
         self._media_sample_rate = sample_rate
         self._media_content_type = content_type
+        self._start_event.set()
 
     async def _handle_media(self, packet: dict[str, Any]) -> None:
         media = packet.get("media") if isinstance(packet.get("media"), dict) else {}
@@ -360,6 +369,7 @@ class VobizTelephony:
         self._finished = True
         self.stopped = True
         self.stop_reason = self.stop_reason or reason
+        self._start_event.set()
         self._clear_ack_event.set()
         _put_terminal(self._incoming_audio)
         _put_terminal(self._playback_events)

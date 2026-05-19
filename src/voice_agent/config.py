@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     vobiz_answer_url: str | None = None
     vobiz_answer_method: str = "POST"
     vobiz_stream_ws_path: str = "/ws/vobiz"
+    vobiz_stream_auth_token: str | None = None
+    vobiz_start_timeout_ms: int = 3000
     deepgram_api_key: str | None = None
     sarvam_api_key: str | None = None
     cartesia_api_key: str | None = None
@@ -111,8 +113,23 @@ class Settings(BaseSettings):
 
     talker_model: str = "mock-talker"
     listener_model: str = "mock-listener"
+    llm_system_prompt: str = (
+        "You are a real-time phone voice agent. Reply briefly, naturally, "
+        "and with one question at a time. Match the user's language style. "
+        "Do not use markdown, bullets, code formatting, or long paragraphs."
+    )
+    litellm_api_key: str | None = None
+    litellm_api_base: str | None = None
+    litellm_api_version: str | None = None
+    talker_max_tokens: int = 80
+    talker_temperature: float = 0.2
+    listener_max_tokens: int = 120
+    listener_temperature: float = 0.0
     llm_first_token_timeout_ms: int = 3000
     llm_total_timeout_ms: int = 15000
+    llm_sentence_min_chars: int = 80
+    llm_sentence_max_chars: int = 160
+    llm_sentence_timeout_ms: int = 500
 
     deepgram_ws_url: str = "wss://api.deepgram.com/v1/listen"
     deepgram_model: str = "nova-3"

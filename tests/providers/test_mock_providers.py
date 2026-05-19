@@ -11,7 +11,7 @@ from voice_agent.contracts.ports import (
 )
 from voice_agent.contracts.packets import now_ms
 from voice_agent.factory.provider_registry import create_default_registry
-from voice_agent.providers.llm import MockLLM
+from voice_agent.providers.llm import LiteLLM, MockLLM
 from voice_agent.providers.storage import MemoryStore
 from voice_agent.providers.stt import DeepgramSTT, MockSTT
 from voice_agent.providers.telephony import MockTelephony
@@ -40,6 +40,8 @@ def test_default_registry_creates_mock_providers() -> None:
     assert registry.available("tts") == ("cartesia", "mock")
     assert isinstance(registry.create("tts", "cartesia"), CartesiaTTS)
     assert isinstance(registry.create("tts", "mock"), MockTTS)
+    assert registry.available("llm") == ("litellm", "mock")
+    assert isinstance(registry.create("llm", "litellm"), LiteLLM)
     assert isinstance(registry.create("llm", "mock"), MockLLM)
     assert isinstance(registry.create("live_store", "memory"), MemoryStore)
     assert isinstance(registry.create("final_store", "memory"), MemoryStore)

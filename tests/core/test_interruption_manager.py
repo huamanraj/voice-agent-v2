@@ -1,7 +1,7 @@
 import asyncio
 
 from voice_agent.config import Settings
-from voice_agent.contracts.events import SpeechStart, TranscriptEvent
+from voice_agent.contracts.events import SpeechStart, SpeechStop, TranscriptEvent
 from voice_agent.core.interruption.interruption_manager import (
     InterruptionManager,
     InterruptionOutcome,
@@ -134,6 +134,24 @@ def test_short_noise_stays_pending_not_confirmed() -> None:
         assert decision.reason == "not_enough_words"
         assert sequence_manager.is_valid(1)
         assert output_gate.state == OutputGateState.WAIT
+        assert telephony.clear_reasons == []
+        assert tts.cancelled_message_ids == set()
+        assert llm.cancelled_response_ids == set()
+
+    asyncio.run(scenario())
+
+
+def test_speech_stop_releases_candidate_without_cancel_or_clear() -> None:
+    async def scenario() -> None:
+        manager, sequence_manager, output_gate, telephony, tts, llm = build_manager()
+
+        await manager.handle_speech_start(SpeechStart("call-interrupt", 1000, "vad", 0.9))
+        decision = await manager.handle_speech_stop(SpeechStop("call-interrupt", 1120, "vad", 0.9))
+
+        assert decision.outcome == InterruptionOutcome.REJECTED
+        assert decision.reason == "speech_stop_without_confirmation"
+        assert output_gate.state == OutputGateState.SEND
+        assert sequence_manager.is_valid(1)
         assert telephony.clear_reasons == []
         assert tts.cancelled_message_ids == set()
         assert llm.cancelled_response_ids == set()

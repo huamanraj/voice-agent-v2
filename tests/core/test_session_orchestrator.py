@@ -2,6 +2,7 @@ import asyncio
 
 from voice_agent.config import Settings
 from voice_agent.contracts.audio import AudioFrame
+from voice_agent.contracts.events import InterruptionStarted
 from voice_agent.contracts.packets import AgentPacket, now_ms
 from voice_agent.core.interruption.output_gate import OutputGateState
 from voice_agent.core.session_orchestrator import SessionOrchestrator, SessionProviders
@@ -55,6 +56,10 @@ def test_mock_session_runs_to_clean_shutdown() -> None:
         assert stats.user_turns_finalized == 1
         assert stats.llm_responses_started == 1
         assert stats.audio_chunks_sent >= 1
+        assert telephony.checkpoints == ["call-1-message-1"]
+        assert orchestrator.playback_tracker.heard_text("call-1-message-1") == "Absolutely, I can help."
+        assert orchestrator.context_manager.assistant_turns[-1].heard_text == "Absolutely, I can help."
+        assert not orchestrator.context_manager.assistant_turns[-1].interrupted
         assert await live_store.get_call_state("call-1") is None
         assert final_store.call_records["call-1"]["state"] == "closed"
 
@@ -214,5 +219,124 @@ def test_output_loop_drops_audio_when_gate_wait_times_out() -> None:
         assert telephony.sent_audio == []
         assert orchestrator.output_gate.state == OutputGateState.WAIT
         assert orchestrator.stats.waited_audio_chunks_dropped == 1
+
+    asyncio.run(scenario())
+
+
+def test_confirmed_interruption_purges_stale_tts_packets() -> None:
+    async def scenario() -> None:
+        orchestrator = SessionOrchestrator(
+            call_id="call-6",
+            providers=SessionProviders(
+                telephony=MockTelephony(call_id="call-6"),
+                stt=MockSTT(),
+                tts=MockTTS(),
+                llm=MockLLM(),
+            ),
+        )
+        sequence_id = orchestrator.sequence_manager.create_sequence()
+        frame = AudioFrame(
+            call_id="call-6",
+            data=b"old-audio",
+            timestamp_ms=now_ms(),
+            sample_rate=8000,
+            codec="mulaw_8k",
+            sequence_id=sequence_id,
+        )
+        await orchestrator.queues.tts_request.put(
+            AgentPacket(
+                packet_type="llm_sentence",
+                call_id="call-6",
+                turn_id=1,
+                sequence_id=sequence_id,
+                request_id="response-1",
+                timestamp_ms=now_ms(),
+                data={"text": "old text", "message_id": "message-1"},
+            )
+        )
+        await orchestrator.queues.tts_audio.put(
+            AgentPacket(
+                packet_type="tts_audio_chunk",
+                call_id="call-6",
+                turn_id=1,
+                sequence_id=sequence_id,
+                request_id="response-1",
+                timestamp_ms=now_ms(),
+                data={"frame": frame},
+            )
+        )
+
+        orchestrator.sequence_manager.invalidate_pending("interruption")
+        await orchestrator._handle_confirmed_interruption(
+            InterruptionStarted(
+                call_id="call-6",
+                turn_id=1,
+                sequence_id=sequence_id,
+                reason="force_interrupt_phrase",
+                transcript="wait",
+                ts_ms=now_ms(),
+            )
+        )
+
+        assert orchestrator.queues.tts_request.empty()
+        assert orchestrator.queues.tts_audio.empty()
+        assert orchestrator.stats.pending_tts_requests_purged == 1
+        assert orchestrator.stats.pending_tts_audio_purged == 1
+
+    asyncio.run(scenario())
+
+
+def test_confirmed_interruption_updates_context_with_heard_partial_text() -> None:
+    async def scenario() -> None:
+        orchestrator = SessionOrchestrator(
+            call_id="call-7",
+            providers=SessionProviders(
+                telephony=MockTelephony(call_id="call-7"),
+                stt=MockSTT(),
+                tts=MockTTS(),
+                llm=MockLLM(),
+            ),
+        )
+        sequence_id = orchestrator.sequence_manager.create_sequence()
+        message_id = "call-7-message-1"
+        orchestrator.playback_tracker.start_message(message_id=message_id, sequence_id=sequence_id)
+        orchestrator.context_manager.start_assistant_turn(message_id=message_id, sequence_id=sequence_id)
+        orchestrator.playback_tracker.append_generated_text(message_id, "hello world again")
+        orchestrator.context_manager.append_assistant_text(message_id, "hello world again")
+        orchestrator.playback_tracker.mark_audio_sent(
+            AudioFrame(
+                call_id="call-7",
+                data=b"audio",
+                timestamp_ms=1000,
+                sample_rate=8000,
+                codec="mulaw_8k",
+                sequence_id=sequence_id,
+                duration_ms=1000,
+                meta={
+                    "message_id": message_id,
+                    "word_timestamps": {
+                        "words": ["hello", "world", "again"],
+                        "end": [0.2, 0.5, 0.9],
+                    },
+                },
+            ),
+            timestamp_ms=1000,
+        )
+
+        await orchestrator._handle_confirmed_interruption(
+            InterruptionStarted(
+                call_id="call-7",
+                turn_id=1,
+                sequence_id=sequence_id,
+                reason="word_count_threshold",
+                transcript="wait",
+                ts_ms=1600,
+            )
+        )
+
+        assistant = orchestrator.context_manager.assistant_turns[-1]
+        assert assistant.heard_text == "hello world"
+        assert assistant.full_text == "hello world again"
+        assert assistant.interrupted
 
     asyncio.run(scenario())
