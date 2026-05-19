@@ -6,7 +6,7 @@ Production-ready telephony AI voice agent built around Ports and Adapters.
 Current build status:
 - Phase 0 complete: `uv` project, virtual environment, config, app shell, logging shell.
 - Phase 1 complete: provider-neutral contracts for audio, packets, events, ports, and capabilities.
-- Provider adapters are intentionally not implemented yet; Phase 2 adds mocks first.
+- Phase 2 complete: mock telephony, STT, TTS, LLM, and in-memory storage for offline simulation.
 
 Local setup:
 ```powershell

@@ -24,3 +24,21 @@ class ProviderRegistry:
 
     def available(self, category: str) -> tuple[str, ...]:
         return tuple(sorted(self._providers.get(category, {})))
+
+
+def create_default_registry() -> ProviderRegistry:
+    from voice_agent.providers.llm.mock import MockLLM
+    from voice_agent.providers.storage.memory_store import MemoryStore
+    from voice_agent.providers.stt.mock import MockSTT
+    from voice_agent.providers.telephony.mock import MockTelephony
+    from voice_agent.providers.tts.mock import MockTTS
+
+    registry = ProviderRegistry()
+    registry.register("telephony", "mock", MockTelephony)
+    registry.register("stt", "mock", MockSTT)
+    registry.register("tts", "mock", MockTTS)
+    registry.register("llm", "mock", MockLLM)
+    registry.register("live_store", "memory", MemoryStore)
+    registry.register("final_store", "memory", MemoryStore)
+    registry.register("memory", "memory", MemoryStore)
+    return registry
