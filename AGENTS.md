@@ -15,6 +15,16 @@ Call media stream
 
 The most important goal is smooth real-time calling with low latency, correct turn handling, and no broken interruption behavior.
 
+## Reference implementation (bolna-master)
+
+This repo follows the same voice-agent system design as [Bolna](https://github.com/bolna-ai/bolna). When exploring architecture, pipeline flow, provider wiring, or turn/interruption patterns, check the local **`bolna-master/`** folder at the repo root for working code examples.
+
+- Use it as a **reference**, not something to copy blindly — adapt patterns to this project's structure (`src/mercury/`, `src/voice_agent/`, etc.).
+- Prefer reading Bolna for design intent; implement changes in this codebase's modules and conventions.
+- `bolna-master/` is gitignored; it may not exist in every checkout so search look wiki https://deepwiki.com/bolna-ai/bolna/2-architecture  https://deepwiki.com/bolna-ai/bolna/2.1-core-orchestration:-taskmanager  https://deepwiki.com/bolna-ai/bolna/4.2-conversational-agents  https://deepwiki.com/bolna-ai/bolna/5.4-telephony-integration  https://deepwiki.com/bolna-ai/bolna/6.1-interruption-handling  https://deepwiki.com/bolna-ai/bolna/2.3-queue-based-communication  
+
+
+
 ## Main coding rules
 
 - Keep the call pipeline fast.
@@ -23,7 +33,12 @@ The most important goal is smooth real-time calling with low latency, correct tu
 - Do not use `time.sleep()` in async code. Use `await asyncio.sleep()` instead.
 - Do not make large refactors unless the task clearly needs it.
 - Prefer small, safe changes.
+- Always keep file context small and files modular 
+- Dont hardcode thing or do quick fix
 - Keep existing function names and file structure unless there is a strong reason to change them.
+- Before making any chnage do deep research from web your knowledge is older
+- Always read docs dont rely on your knowledge 
+
 
 ## Voice call behavior rules
 
@@ -138,22 +153,6 @@ When explaining a change, include:
 
 Use simple English.
 
-````
 
-For your project, this is enough.
 
-You can also add a more specific file near the dangerous call-stream code:
-
-```txt
-src/mercury/api/routes/vobiz/AGENTS.md
-````
-
-Be very careful with:
-
-- websocket receive/send loops
-- audio chunk timing
-- STT transcript timing
-- TTS playback queue
-- interruption and barge-in logic
-- turn id / speech epoch / response id matching
 

@@ -35,7 +35,7 @@ models/*.onnx
 build/
 dist/
 *.egg-info/
-
+bolna-master/
 # Editors and OS
 .idea/
 .vscode/
