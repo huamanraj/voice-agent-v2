@@ -26,4 +26,5 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-p", "no:cacheprovider"]
+# Keep temp dirs inside the repo; avoids PermissionError on E:\temp\pytest-of-*.
+addopts = ["-p", "no:cacheprovider", "--basetemp=.pytest-tmp"]
