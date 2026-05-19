@@ -61,17 +61,22 @@ class Settings(BaseSettings):
     queue_audio_in_max: int = 100
     queue_stt_audio_max: int = 150
     queue_vad_audio_max: int = 150
+    queue_rolling_audio_max: int = 150
     queue_transcript_event_max: int = 500
     queue_speech_event_max: int = 500
     queue_turn_event_max: int = 100
     queue_interruption_event_max: int = 100
+    queue_llm_request_max: int = 100
     queue_llm_output_max: int = 500
+    queue_tts_request_max: int = 100
     queue_tts_audio_max: int = 200
     queue_telephony_audio_out_max: int = 200
     queue_playback_event_max: int = 500
     queue_metrics_max: int = 1000
     queue_dtmf_max: int = 100
+    queue_error_max: int = 100
     shutdown_grace_seconds: int = 10
+    output_gate_wait_timeout_ms: int = 250
 
     telephony_codec: str = "mulaw_8k"
     telephony_sample_rate: int = 8000

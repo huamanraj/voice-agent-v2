@@ -1,0 +1,218 @@
+import asyncio
+
+from voice_agent.config import Settings
+from voice_agent.contracts.audio import AudioFrame
+from voice_agent.contracts.packets import AgentPacket, now_ms
+from voice_agent.core.interruption.output_gate import OutputGateState
+from voice_agent.core.session_orchestrator import SessionOrchestrator, SessionProviders
+from voice_agent.core.state_machine import CallState
+from voice_agent.providers.llm import MockLLM
+from voice_agent.providers.storage import MemoryStore
+from voice_agent.providers.stt import MockSTT
+from voice_agent.providers.telephony import MockTelephony
+from voice_agent.providers.tts import MockTTS
+
+
+def test_mock_session_runs_to_clean_shutdown() -> None:
+    async def scenario() -> None:
+        live_store = MemoryStore()
+        final_store = MemoryStore()
+        telephony = MockTelephony(call_id="call-1")
+        stt = MockSTT()
+        tts = MockTTS(chunk_words=2)
+        llm = MockLLM(responses=["Absolutely, I can help."])
+        orchestrator = SessionOrchestrator(
+            call_id="call-1",
+            providers=SessionProviders(
+                telephony=telephony,
+                stt=stt,
+                tts=tts,
+                llm=llm,
+                live_store=live_store,
+                final_store=final_store,
+            ),
+        )
+
+        await telephony.enqueue_audio(
+            AudioFrame(
+                call_id="call-1",
+                data=b"mock-audio",
+                timestamp_ms=now_ms(),
+                sample_rate=8000,
+                codec="mulaw_8k",
+                duration_ms=20,
+                meta={"transcript": "I need help", "language": "en-IN"},
+            )
+        )
+        await telephony.finish_input()
+
+        stats = await asyncio.wait_for(orchestrator.run(), timeout=2)
+
+        assert orchestrator.state == CallState.CLOSED
+        assert telephony.stopped
+        assert stats.audio_frames_received == 1
+        assert stats.transcripts_received == 1
+        assert stats.user_turns_finalized == 1
+        assert stats.llm_responses_started == 1
+        assert stats.audio_chunks_sent >= 1
+        assert await live_store.get_call_state("call-1") is None
+        assert final_store.call_records["call-1"]["state"] == "closed"
+
+    asyncio.run(scenario())
+
+
+def test_mock_session_start_then_shutdown_does_not_hang() -> None:
+    async def scenario() -> None:
+        telephony = MockTelephony(call_id="call-2")
+        orchestrator = SessionOrchestrator(
+            call_id="call-2",
+            providers=SessionProviders(
+                telephony=telephony,
+                stt=MockSTT(),
+                tts=MockTTS(),
+                llm=MockLLM(),
+                live_store=MemoryStore(),
+                final_store=MemoryStore(),
+            ),
+        )
+
+        await orchestrator.start()
+        await asyncio.wait_for(orchestrator.shutdown("test_shutdown"), timeout=2)
+
+        assert orchestrator.state == CallState.CLOSED
+        assert telephony.stop_reason == "test_shutdown"
+        assert all(task.done() for task in orchestrator.tasks.values())
+
+    asyncio.run(scenario())
+
+
+def test_output_loop_drops_stale_sequence_audio() -> None:
+    async def scenario() -> None:
+        telephony = MockTelephony(call_id="call-3")
+        orchestrator = SessionOrchestrator(
+            call_id="call-3",
+            providers=SessionProviders(
+                telephony=telephony,
+                stt=MockSTT(),
+                tts=MockTTS(),
+                llm=MockLLM(),
+            ),
+        )
+        stale_frame = AudioFrame(
+            call_id="call-3",
+            data=b"stale",
+            timestamp_ms=now_ms(),
+            sample_rate=8000,
+            codec="mulaw_8k",
+            sequence_id=99,
+        )
+
+        await orchestrator.queues.tts_audio.put(
+            AgentPacket(
+                packet_type="tts_audio_chunk",
+                call_id="call-3",
+                turn_id=None,
+                sequence_id=99,
+                request_id=None,
+                timestamp_ms=now_ms(),
+                data={"frame": stale_frame},
+            )
+        )
+        await orchestrator.queues.tts_audio.put(AgentPacket.eos_packet("call-3"))
+
+        await asyncio.wait_for(orchestrator._output_loop(), timeout=1)
+
+        assert telephony.sent_audio == []
+        assert orchestrator.stats.stale_audio_chunks_dropped == 1
+
+    asyncio.run(scenario())
+
+
+def test_output_loop_drops_audio_after_pending_sequences_invalidated() -> None:
+    async def scenario() -> None:
+        telephony = MockTelephony(call_id="call-4")
+        orchestrator = SessionOrchestrator(
+            call_id="call-4",
+            providers=SessionProviders(
+                telephony=telephony,
+                stt=MockSTT(),
+                tts=MockTTS(),
+                llm=MockLLM(),
+            ),
+        )
+        sequence_id = orchestrator.sequence_manager.create_sequence()
+        await orchestrator.invalidate_pending_output("interruption")
+        frame = AudioFrame(
+            call_id="call-4",
+            data=b"old-audio",
+            timestamp_ms=now_ms(),
+            sample_rate=8000,
+            codec="mulaw_8k",
+            sequence_id=sequence_id,
+        )
+
+        await orchestrator.queues.tts_audio.put(
+            AgentPacket(
+                packet_type="tts_audio_chunk",
+                call_id="call-4",
+                turn_id=None,
+                sequence_id=sequence_id,
+                request_id=None,
+                timestamp_ms=now_ms(),
+                data={"frame": frame},
+            )
+        )
+        await orchestrator.queues.tts_audio.put(AgentPacket.eos_packet("call-4"))
+
+        await asyncio.wait_for(orchestrator._output_loop(), timeout=1)
+
+        assert telephony.sent_audio == []
+        assert orchestrator.stats.stale_audio_chunks_dropped == 1
+
+    asyncio.run(scenario())
+
+
+def test_output_loop_drops_audio_when_gate_wait_times_out() -> None:
+    async def scenario() -> None:
+        telephony = MockTelephony(call_id="call-5")
+        orchestrator = SessionOrchestrator(
+            call_id="call-5",
+            providers=SessionProviders(
+                telephony=telephony,
+                stt=MockSTT(),
+                tts=MockTTS(),
+                llm=MockLLM(),
+            ),
+            settings=Settings(output_gate_wait_timeout_ms=1),
+        )
+        sequence_id = orchestrator.sequence_manager.create_sequence()
+        await orchestrator.output_gate.set_wait()
+        frame = AudioFrame(
+            call_id="call-5",
+            data=b"waiting-audio",
+            timestamp_ms=now_ms(),
+            sample_rate=8000,
+            codec="mulaw_8k",
+            sequence_id=sequence_id,
+        )
+
+        await orchestrator.queues.tts_audio.put(
+            AgentPacket(
+                packet_type="tts_audio_chunk",
+                call_id="call-5",
+                turn_id=None,
+                sequence_id=sequence_id,
+                request_id=None,
+                timestamp_ms=now_ms(),
+                data={"frame": frame},
+            )
+        )
+        await orchestrator.queues.tts_audio.put(AgentPacket.eos_packet("call-5"))
+
+        await asyncio.wait_for(orchestrator._output_loop(), timeout=1)
+
+        assert telephony.sent_audio == []
+        assert orchestrator.output_gate.state == OutputGateState.WAIT
+        assert orchestrator.stats.waited_audio_chunks_dropped == 1
+
+    asyncio.run(scenario())
