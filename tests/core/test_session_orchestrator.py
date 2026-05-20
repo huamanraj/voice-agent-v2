@@ -7,6 +7,8 @@ from voice_agent.contracts.packets import AgentPacket, now_ms
 from voice_agent.core.interruption.output_gate import OutputGateState
 from voice_agent.core.session_orchestrator import SessionOrchestrator, SessionProviders
 from voice_agent.core.state_machine import CallState
+from voice_agent.core.turn_detection.local_models import TurnDetectionModels
+from voice_agent.core.turn_detection.smart_turn_runner import SmartTurnDecision
 from voice_agent.providers.llm import MockLLM
 from voice_agent.providers.storage import MemoryStore
 from voice_agent.providers.stt import MockSTT
@@ -94,6 +96,50 @@ def test_mock_session_start_then_shutdown_does_not_hang() -> None:
     asyncio.run(scenario())
 
 
+def test_session_uses_local_vad_and_smart_turn_for_turn_end() -> None:
+    async def scenario() -> None:
+        telephony = MockTelephony(call_id="call-local-turn")
+        orchestrator = SessionOrchestrator(
+            call_id="call-local-turn",
+            providers=SessionProviders(
+                telephony=telephony,
+                stt=MockSTT(),
+                tts=MockTTS(),
+                llm=MockLLM(responses=["Done."]),
+            ),
+            settings=Settings(
+                min_user_speech_ms=0,
+                min_silence_for_turn_end_ms=0,
+                llm_sentence_timeout_ms=1,
+            ),
+            turn_detection_models=TurnDetectionModels(
+                vad=FakeVADModel(),
+                smart_turn=FakeSmartTurnModel(),
+            ),
+        )
+
+        await telephony.enqueue_audio(
+            AudioFrame(
+                call_id="call-local-turn",
+                data=b"\xff" * 160,
+                timestamp_ms=1000,
+                sample_rate=8000,
+                codec="mulaw_8k",
+                duration_ms=20,
+                meta={"transcript": "I need help", "language": "en-IN"},
+            )
+        )
+        await telephony.finish_input()
+
+        stats = await asyncio.wait_for(orchestrator.run(), timeout=2)
+
+        assert stats.user_turns_finalized == 1
+        assert stats.llm_responses_started == 1
+        assert orchestrator.context_manager.user_turns[-1].text == "I need help"
+
+    asyncio.run(scenario())
+
+
 def test_output_loop_drops_stale_sequence_audio() -> None:
     async def scenario() -> None:
         telephony = MockTelephony(call_id="call-3")
@@ -134,6 +180,37 @@ def test_output_loop_drops_stale_sequence_audio() -> None:
         assert orchestrator.stats.stale_audio_chunks_dropped == 1
 
     asyncio.run(scenario())
+
+
+class FakeVADModel:
+    def create_stream(self, call_id: str, settings: Settings) -> "FakeVADStream":
+        return FakeVADStream(call_id)
+
+
+class FakeVADStream:
+    def __init__(self, call_id: str) -> None:
+        self.call_id = call_id
+        self.used = False
+
+    def process_frame(self, frame: AudioFrame):
+        if self.used:
+            return []
+        self.used = True
+        from voice_agent.contracts.events import SpeechStart, SpeechStop
+
+        return [
+            SpeechStart(self.call_id, frame.timestamp_ms, "vad", 0.95),
+            SpeechStop(self.call_id, frame.timestamp_ms + (frame.duration_ms or 20), "vad", 0.95),
+        ]
+
+    def flush(self):
+        return None
+
+
+class FakeSmartTurnModel:
+    def classify(self, frame: AudioFrame) -> SmartTurnDecision:
+        assert frame.codec == "pcm16_16k"
+        return SmartTurnDecision(True, 0.95, "smart_turn_v3_onnx")
 
 
 def test_output_loop_drops_audio_after_pending_sequences_invalidated() -> None:

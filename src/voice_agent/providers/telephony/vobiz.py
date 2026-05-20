@@ -223,21 +223,42 @@ class VobizTelephony:
             await self._finish_stream("auth_failed")
             return
 
-        call_id = start.get("callId") or packet.get("callId")
-        stream_id = start.get("streamId") or packet.get("streamId")
+        call_id = _first_present(
+            start,
+            packet,
+            ("callId", "CallSid", "callSid", "call_id"),
+        )
+        stream_id = _first_present(
+            start,
+            packet,
+            ("streamId", "StreamSid", "streamSid", "stream_id"),
+        )
         if not call_id or not stream_id:
             self._record_error(
                 "invalid_start",
-                "Vobiz start event missing callId or streamId.",
+                "Vobiz start event missing call id or stream id.",
                 retryable=False,
-                details={"has_call_id": bool(call_id), "has_stream_id": bool(stream_id)},
+                details={
+                    "has_call_id": bool(call_id),
+                    "has_stream_id": bool(stream_id),
+                    "start_keys": sorted(str(key) for key in start),
+                    "packet_keys": sorted(str(key) for key in packet),
+                },
             )
             await self._finish_stream("invalid_start")
             return
 
         self.call_id = str(call_id)
         self.stream_id = str(stream_id)
-        media_format = start.get("mediaFormat") if isinstance(start.get("mediaFormat"), dict) else {}
+        media_format = (
+            start.get("mediaFormat")
+            or start.get("media_format")
+            or start.get("media")
+            or packet.get("mediaFormat")
+            or {}
+        )
+        if not isinstance(media_format, dict):
+            media_format = {}
         try:
             codec, sample_rate, content_type = _codec_from_media_format(media_format)
         except ValueError as exc:
@@ -375,7 +396,16 @@ class VobizTelephony:
         _put_terminal(self._playback_events)
 
     def _has_valid_token(self, packet: dict[str, Any], start: dict[str, Any]) -> bool:
-        candidates = [packet.get("token"), start.get("token")]
+        candidates = [
+            packet.get("token"),
+            start.get("token"),
+            start.get("customParameters", {}).get("token")
+            if isinstance(start.get("customParameters"), dict)
+            else None,
+            start.get("custom_parameters", {}).get("token")
+            if isinstance(start.get("custom_parameters"), dict)
+            else None,
+        ]
         extra_headers = packet.get("extra_headers")
         if isinstance(extra_headers, str):
             with suppress(json.JSONDecodeError):
@@ -426,6 +456,21 @@ def _codec_from_media_format(media_format: dict[str, Any]) -> tuple[AudioCodec, 
         return "pcm16_8k", 8000, "audio/x-l16"
 
     raise ValueError(f"Unsupported Vobiz media format: {content_type}")
+
+
+def _first_present(
+    primary: dict[str, Any],
+    secondary: dict[str, Any],
+    keys: tuple[str, ...],
+) -> Any:
+    for key in keys:
+        value = primary.get(key)
+        if value:
+            return value
+        value = secondary.get(key)
+        if value:
+            return value
+    return None
 
 
 def _content_type_for_codec(codec: AudioCodec) -> str:

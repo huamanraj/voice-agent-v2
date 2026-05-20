@@ -68,7 +68,7 @@ class TurnManager:
         self.call_id = call_id
         self.settings = settings
         self.expected_answer = expected_answer
-        self.smart_turn_runner = smart_turn_runner or HeuristicSmartTurnRunner()
+        self.smart_turn_runner = smart_turn_runner
         self.state = TurnState(call_id=call_id)
 
     def set_expected_answer(self, expected_answer: ExpectedAnswer) -> None:
@@ -102,7 +102,8 @@ class TurnManager:
                 self.state.stt_speech_final_seen = True
                 self.state.language = event.language
                 self.state.confidence = event.confidence
-                self._apply_smart_turn(self.state.text)
+                if self.smart_turn_runner is not None:
+                    self._apply_smart_turn(self.state.text)
         else:
             self.state.interim_text = event.text.strip()
 

@@ -15,6 +15,7 @@ from voice_agent.contracts.events import (
     InterruptionStarted,
     PlaybackEvent,
     ProviderError,
+    SmartTurnResult,
     SpeechStart,
     SpeechStop,
     TranscriptEvent,
@@ -49,6 +50,7 @@ from voice_agent.core.observability.call_logger import AsyncCallLogger
 from voice_agent.core.playback.playback_tracker import PlaybackTracker
 from voice_agent.core.response.sentence_aggregator import aggregate_token_stream
 from voice_agent.core.state_machine import CallState
+from voice_agent.core.turn_detection.local_models import TurnDetectionModels
 from voice_agent.core.turn_detection.turn_manager import TurnManager
 
 
@@ -91,6 +93,7 @@ class SessionOrchestrator:
     call_id: str
     providers: SessionProviders
     settings: Settings | None = None
+    turn_detection_models: TurnDetectionModels | None = None
     state: CallState = field(init=False)
     queues: SessionQueues = field(init=False)
     stats: SessionStats = field(init=False)
@@ -110,6 +113,8 @@ class SessionOrchestrator:
     _active_llm_task: asyncio.Task[None] | None = field(init=False)
     _active_llm_response_id: str | None = field(init=False)
     _active_llm_sequence_id: int | None = field(init=False)
+    _turn_check_task: asyncio.Task[None] | None = field(init=False)
+    _vad_stream: Any | None = field(init=False)
     _session_started_ms: int = field(init=False)
     _session_ended_ms: int | None = field(init=False)
     _first_media_frame_seen: bool = field(init=False)
@@ -149,10 +154,18 @@ class SessionOrchestrator:
             on_confirmed=self._handle_confirmed_interruption,
         )
         self.turn_manager = TurnManager(self.call_id, self.settings)
+        self._vad_stream = (
+            self.turn_detection_models.vad.create_stream(self.call_id, self.settings)
+            if self.turn_detection_models is not None
+            and self.turn_detection_models.vad is not None
+            and self.settings.vad_enabled
+            else None
+        )
         self._shutdown_started = False
         self._active_llm_task = None
         self._active_llm_response_id = None
         self._active_llm_sequence_id = None
+        self._turn_check_task = None
         self._session_started_ms = now_ms()
         self._session_ended_ms = None
         self._first_media_frame_seen = False
@@ -174,6 +187,16 @@ class SessionOrchestrator:
         self._log("provider_connected", provider=self.providers.stt.provider_name)
         await self.providers.tts.start(self.call_id, voice="mock-voice", language="en-IN")
         self._log("provider_connected", provider=self.providers.tts.provider_name)
+        self._log(
+            "turn_detection_models",
+            vad="ready" if self._vad_stream is not None else "unavailable",
+            smart_turn=(
+                "ready"
+                if self.turn_detection_models is not None
+                and self.turn_detection_models.smart_turn is not None
+                else "unavailable"
+            ),
+        )
 
         self.tasks = {
             "receive_audio_loop": self._create_task("receive_audio_loop", self._receive_audio_loop),
@@ -182,7 +205,11 @@ class SessionOrchestrator:
             "stt_speech_loop": self._create_task("stt_speech_loop", self._stt_speech_loop),
             "vad_processor_loop": self._create_task(
                 "vad_processor_loop",
-                lambda: self._drain_loop(self.queues.vad_audio),
+                (
+                    self._vad_processor_loop
+                    if self._vad_stream is not None
+                    else lambda: self._drain_loop(self.queues.vad_audio)
+                ),
             ),
             "rolling_buffer_loop": self._create_task(
                 "rolling_buffer_loop",
@@ -222,6 +249,7 @@ class SessionOrchestrator:
 
         self._shutdown_started = True
         self.state = CallState.CLOSING
+        self._cancel_turn_check()
         await self._save_live_state()
         await self._send_eos_to_all_queues()
         await self._stop_providers(reason)
@@ -331,29 +359,14 @@ class SessionOrchestrator:
 
     async def _stt_speech_loop(self) -> None:
         async for speech_event in self.providers.stt.speech_events():
-            if isinstance(speech_event, SpeechStart):
-                self.latency_tracker.mark_speech_start(None, speech_event.ts_ms)
-                self._log("speech_start", provider=speech_event.source, confidence=speech_event.confidence)
-            else:
-                self.latency_tracker.mark_speech_stop(None, speech_event.ts_ms)
-                self._log("speech_stop", provider=speech_event.source, confidence=speech_event.confidence)
-            await put_packet(
-                self.queues.speech_event,
-                self._packet("speech_event", {"event": speech_event}),
-                BackpressurePolicy.DROP_OLDEST,
-            )
-            await put_packet(
-                self.queues.interruption_event,
-                self._packet("speech_event", {"event": speech_event}),
-                BackpressurePolicy.DROP_OLDEST,
-            )
-            if isinstance(speech_event, SpeechStart):
-                self.turn_manager.handle_speech_start(speech_event)
-            else:
-                self.turn_manager.handle_speech_stop(speech_event)
-                turn = self.turn_manager.emit_turn(now_ms())
-                if turn is not None:
-                    await self._emit_user_turn(turn)
+            if self._vad_stream is not None:
+                self._log(
+                    "provider_speech_event_ignored",
+                    provider=speech_event.source,
+                    reason="local_silero_vad_active",
+                )
+                continue
+            await self._handle_speech_event(speech_event, run_smart_turn=False)
 
         await put_packet(
             self.queues.speech_event,
@@ -361,10 +374,110 @@ class SessionOrchestrator:
             BackpressurePolicy.DROP_OLDEST,
         )
 
+    async def _vad_processor_loop(self) -> None:
+        if self._vad_stream is None:
+            await self._drain_loop(self.queues.vad_audio)
+            return
+
+        while True:
+            packet = await self.queues.vad_audio.get()
+            if packet.eos:
+                stop_event = self._vad_stream.flush()
+                if stop_event is not None:
+                    await self._handle_speech_event(stop_event, run_smart_turn=True)
+                self.queues.vad_audio.task_done()
+                break
+
+            frame = packet.data["frame"]
+            if not isinstance(frame, AudioFrame):
+                raise TypeError("vad_audio packet must contain an AudioFrame.")
+
+            events = self._vad_stream.process_frame(frame)
+            for event in events:
+                await self._handle_speech_event(event, run_smart_turn=True)
+            self.queues.vad_audio.task_done()
+
+    async def _handle_speech_event(
+        self,
+        speech_event: SpeechStart | SpeechStop,
+        *,
+        run_smart_turn: bool,
+    ) -> None:
+        if isinstance(speech_event, SpeechStart):
+            self._cancel_turn_check()
+            self.latency_tracker.mark_speech_start(None, speech_event.ts_ms)
+            self._log(
+                "speech_start",
+                provider=speech_event.source,
+                confidence=speech_event.confidence,
+            )
+        else:
+            self.latency_tracker.mark_speech_stop(None, speech_event.ts_ms)
+            self._log(
+                "speech_stop",
+                provider=speech_event.source,
+                confidence=speech_event.confidence,
+            )
+
+        packet = self._packet("speech_event", {"event": speech_event})
+        await put_packet(self.queues.speech_event, packet, BackpressurePolicy.DROP_OLDEST)
+        await put_packet(
+            self.queues.interruption_event,
+            packet,
+            BackpressurePolicy.DROP_OLDEST,
+        )
+
+        if isinstance(speech_event, SpeechStart):
+            self.turn_manager.handle_speech_start(speech_event)
+            return
+
+        self.turn_manager.handle_speech_stop(speech_event)
+        if run_smart_turn:
+            await self._run_smart_turn_for_current_turn()
+        await self._emit_turn_if_ready()
+
+    async def _run_smart_turn_for_current_turn(self) -> None:
+        if (
+            not self.settings.smart_turn_enabled
+            or self.turn_detection_models is None
+            or self.turn_detection_models.smart_turn is None
+        ):
+            return
+
+        turn_audio = self.rolling_audio_buffer.frame_since(self.turn_manager.state.user_started_ms)
+        if not turn_audio.data:
+            return
+
+        started_ms = now_ms()
+        decision = await asyncio.to_thread(self.turn_detection_models.smart_turn.classify, turn_audio)
+        result = SmartTurnResult(
+            call_id=self.call_id,
+            turn_id=self.turn_manager.state.turn_id + 1,
+            is_complete=decision.is_complete,
+            confidence=decision.confidence,
+            reason=decision.reason,
+        )
+        self.turn_manager.handle_smart_turn(result)
+        self._log(
+            "smart_turn_result",
+            turn_id=result.turn_id,
+            confidence=result.confidence,
+            is_complete=result.is_complete,
+            reason=result.reason,
+            latency_ms=now_ms() - started_ms,
+            audio_duration_ms=turn_audio.duration_ms,
+        )
+        await put_packet(
+            self.queues.metrics,
+            self._packet("smart_turn_result", {"event": result}, turn_id=result.turn_id),
+            BackpressurePolicy.DROP_METRICS,
+        )
+
     async def _turn_manager_loop(self) -> None:
         while True:
             packet = await self.queues.transcript_event.get()
             if packet.eos:
+                self._cancel_turn_check()
                 forced_turn = self.turn_manager.force_emit("transcript_eos", now_ms())
                 if forced_turn is not None:
                     await self._emit_user_turn(forced_turn)
@@ -381,12 +494,67 @@ class SessionOrchestrator:
                 raise TypeError("transcript_event packet must contain a TranscriptEvent.")
 
             self.turn_manager.handle_transcript(transcript)
-            turn = self.turn_manager.emit_turn(now_ms())
-            if turn is not None:
-                await self._emit_user_turn(turn)
+            await self._emit_turn_if_ready()
             self.queues.transcript_event.task_done()
 
+    async def _emit_turn_if_ready(self) -> None:
+        turn = self.turn_manager.emit_turn(now_ms())
+        if turn is not None:
+            await self._emit_user_turn(turn)
+            return
+        self._schedule_turn_check()
+
+    def _schedule_turn_check(self) -> None:
+        delay_ms = self._next_turn_check_delay_ms()
+        if delay_ms is None:
+            return
+        self._cancel_turn_check()
+        self._turn_check_task = asyncio.create_task(
+            self._delayed_turn_check(delay_ms),
+            name=f"{self.call_id}:turn_check",
+        )
+
+    def _cancel_turn_check(self) -> None:
+        task = self._turn_check_task
+        self._turn_check_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _delayed_turn_check(self, delay_ms: int) -> None:
+        try:
+            await asyncio.sleep(delay_ms / 1000)
+            if self._turn_check_task is asyncio.current_task():
+                self._turn_check_task = None
+            await self._emit_turn_if_ready()
+        except asyncio.CancelledError:
+            raise
+
+    def _next_turn_check_delay_ms(self) -> int | None:
+        state = self.turn_manager.state
+        if state.emitted_turn or state.is_user_speaking or state.user_started_ms is None:
+            return None
+        if not state.text:
+            return None
+
+        ts_ms = now_ms()
+        decision = self.turn_manager.evaluate(ts_ms)
+        if decision.should_emit:
+            return 0
+
+        speech_duration_ms = max(0, (state.last_speech_ms or ts_ms) - state.user_started_ms)
+        if decision.reason == "speech_too_short":
+            return max(1, self.settings.min_user_speech_ms - speech_duration_ms)
+
+        silence_start_ms = state.last_speech_ms or state.last_transcript_ms or ts_ms
+        silence_ms = max(0, ts_ms - silence_start_ms)
+        if decision.reason == "not_enough_silence":
+            return max(1, self.settings.min_silence_for_turn_end_ms - silence_ms)
+        if decision.reason in {"smart_turn_incomplete", "incomplete_connector"}:
+            return max(1, self.settings.max_silence_before_force_end_ms - silence_ms)
+        return None
+
     async def _emit_user_turn(self, turn: UserTurnFinal) -> None:
+        self._cancel_turn_check()
         self.stats.user_turns_finalized += 1
         self.latency_tracker.mark_end_of_turn(turn.turn_id, now_ms())
         self._log(
@@ -903,6 +1071,7 @@ class SessionOrchestrator:
     async def _finalize_closed(self, reason: str = "closed") -> None:
         if self.state == CallState.CLOSED:
             return
+        self._cancel_turn_check()
         self.state = CallState.CLOSED
         self._session_ended_ms = now_ms()
         self._log("call_ended", reason=reason, stats=asdict(self.stats))

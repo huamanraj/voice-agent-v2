@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from voice_agent.config import Settings
 from voice_agent.contracts.ports import TelephonyPort
 from voice_agent.core.session_orchestrator import SessionOrchestrator, SessionProviders
+from voice_agent.core.turn_detection.local_models import TurnDetectionModels
 from voice_agent.factory.config_resolver import ProviderSelection, resolve_provider_selection
 from voice_agent.factory.provider_registry import ProviderRegistry, create_default_registry
 
@@ -31,6 +32,7 @@ def create_session_orchestrator(
     settings: Settings,
     registry: ProviderRegistry | None = None,
     agent_overrides: dict[str, str] | None = None,
+    turn_detection_models: TurnDetectionModels | None = None,
 ) -> SessionOrchestrator:
     provider_registry = registry or create_default_registry()
     selection = resolve_provider_selection(settings, agent_overrides)
@@ -42,7 +44,12 @@ def create_session_orchestrator(
         live_store=_create_live_store(provider_registry, selection.live_store, settings),
         final_store=_create_final_store(provider_registry, selection.final_store, settings),
     )
-    return SessionOrchestrator(call_id=call_id, providers=providers, settings=settings)
+    return SessionOrchestrator(
+        call_id=call_id,
+        providers=providers,
+        settings=settings,
+        turn_detection_models=turn_detection_models,
+    )
 
 
 def create_session_orchestrator_with_telephony(
@@ -51,6 +58,7 @@ def create_session_orchestrator_with_telephony(
     telephony: TelephonyPort,
     registry: ProviderRegistry | None = None,
     agent_overrides: dict[str, str] | None = None,
+    turn_detection_models: TurnDetectionModels | None = None,
 ) -> SessionOrchestrator:
     provider_registry = registry or create_default_registry()
     selection = resolve_provider_selection(settings, agent_overrides)
@@ -62,7 +70,12 @@ def create_session_orchestrator_with_telephony(
         live_store=_create_live_store(provider_registry, selection.live_store, settings),
         final_store=_create_final_store(provider_registry, selection.final_store, settings),
     )
-    return SessionOrchestrator(call_id=call_id, providers=providers, settings=settings)
+    return SessionOrchestrator(
+        call_id=call_id,
+        providers=providers,
+        settings=settings,
+        turn_detection_models=turn_detection_models,
+    )
 
 
 def _create_live_store(provider_registry: ProviderRegistry, provider_name: str, settings: Settings):

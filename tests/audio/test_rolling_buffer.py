@@ -31,11 +31,24 @@ def test_rolling_audio_buffer_rejects_wrong_codec() -> None:
         raise AssertionError("Expected wrong codec to be rejected.")
 
 
-def frame(duration_ms: int) -> AudioFrame:
+def test_rolling_audio_buffer_returns_audio_since_timestamp() -> None:
+    buffer = RollingAudioBuffer(call_id="call-roll")
+    buffer.append(frame(duration_ms=20, timestamp_ms=1000))
+    buffer.append(frame(duration_ms=20, timestamp_ms=1020))
+    buffer.append(frame(duration_ms=20, timestamp_ms=1040))
+
+    segment = buffer.frame_since(1020)
+
+    assert segment.timestamp_ms == 1020
+    assert segment.duration_ms == 40
+    assert len(segment.data) == 1280
+
+
+def frame(duration_ms: int, timestamp_ms: int = 1000) -> AudioFrame:
     return AudioFrame(
         call_id="call-roll",
         data=silence_bytes("pcm16_16k", duration_ms),
-        timestamp_ms=1000,
+        timestamp_ms=timestamp_ms,
         sample_rate=16000,
         codec="pcm16_16k",
         duration_ms=duration_ms,

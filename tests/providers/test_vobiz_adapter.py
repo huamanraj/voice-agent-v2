@@ -94,6 +94,31 @@ def test_vobiz_start_and_media_decode_to_audio_frame() -> None:
     asyncio.run(scenario())
 
 
+def test_vobiz_start_accepts_sid_style_fields_from_docs() -> None:
+    async def scenario() -> None:
+        websocket = FakeVobizWebSocket()
+        adapter = VobizTelephony(websocket)
+
+        await websocket.feed_json(
+            {
+                "event": "start",
+                "start": {
+                    "CallSid": "call-sid-123",
+                    "StreamSid": "stream-sid-123",
+                    "media_format": {"encoding": "audio/x-mulaw", "sampleRate": 8000},
+                },
+            }
+        )
+        await adapter.start()
+        await wait_until(lambda: adapter.stream_id == "stream-sid-123")
+
+        assert adapter.call_id == "call-sid-123"
+        assert adapter.errors == []
+        await adapter.stop("test_done")
+
+    asyncio.run(scenario())
+
+
 def test_vobiz_send_audio_chunks_20ms_play_audio_messages() -> None:
     async def scenario() -> None:
         websocket = FakeVobizWebSocket()

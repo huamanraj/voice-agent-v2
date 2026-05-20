@@ -1,5 +1,5 @@
 from voice_agent.config import Settings
-from voice_agent.contracts.events import SpeechStart, SpeechStop, TranscriptEvent
+from voice_agent.contracts.events import SmartTurnResult, SpeechStart, SpeechStop, TranscriptEvent
 from voice_agent.core.turn_detection.expected_answer import ExpectedAnswer
 from voice_agent.core.turn_detection.turn_manager import TurnManager
 
@@ -104,3 +104,36 @@ def test_turn_manager_uses_vad_stop_when_smart_turn_disabled() -> None:
 
     assert turn is not None
     assert turn.text == "I want policy details"
+
+
+def test_turn_manager_requires_explicit_smart_turn_result() -> None:
+    settings = Settings(
+        min_user_speech_ms=100,
+        min_silence_for_turn_end_ms=250,
+        smart_turn_threshold=0.65,
+    )
+    manager = TurnManager("call-turn", settings)
+
+    manager.handle_speech_start(SpeechStart("call-turn", 1000, "vad", 0.9))
+    manager.handle_transcript(
+        transcript("I want policy details today please", start_ms=1000, end_ms=1400)
+    )
+    manager.handle_speech_stop(SpeechStop("call-turn", 1400, "vad", 0.9))
+
+    decision = manager.evaluate(timestamp_ms=1700)
+    assert not decision.should_emit
+    assert decision.reason == "smart_turn_incomplete"
+
+    manager.handle_smart_turn(
+        SmartTurnResult(
+            call_id="call-turn",
+            turn_id=1,
+            is_complete=True,
+            confidence=0.9,
+            reason="smart_turn_v3_onnx",
+        )
+    )
+    turn = manager.emit_turn(timestamp_ms=1700)
+
+    assert turn is not None
+    assert turn.text == "I want policy details today please"

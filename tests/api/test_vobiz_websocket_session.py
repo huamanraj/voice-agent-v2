@@ -13,7 +13,11 @@ from voice_agent.providers.llm import MockLLM
 from voice_agent.providers.storage import MemoryStore
 from voice_agent.providers.telephony import VobizTelephony
 from voice_agent.providers.tts import MockTTS
-from voice_agent.api.ws import run_vobiz_websocket_session
+from voice_agent.api.ws import (
+    _INVALID_STREAM_TOKEN,
+    _stream_auth_token_for_session,
+    run_vobiz_websocket_session,
+)
 
 
 class FakeVobizWebSocket:
@@ -33,6 +37,11 @@ class FakeVobizWebSocket:
 
     async def feed_json(self, packet: dict[str, Any]) -> None:
         await self.incoming.put(json.dumps(packet))
+
+
+class QueryWebSocket:
+    def __init__(self, token: str | None) -> None:
+        self.query_params = {} if token is None else {"token": token}
 
 
 class TranscriptOnAudioSTT:
@@ -120,6 +129,7 @@ def test_vobiz_websocket_session_runs_user_turn_to_play_audio() -> None:
             smart_turn_enabled=False,
             llm_sentence_timeout_ms=1,
             vobiz_start_timeout_ms=500,
+            vobiz_stream_auth_token=None,
         )
 
         session_task = asyncio.create_task(
@@ -146,7 +156,7 @@ def test_vobiz_websocket_session_times_out_without_start_event() -> None:
     async def scenario() -> None:
         websocket = FakeVobizWebSocket()
         registry = build_registry()
-        settings = Settings(vobiz_start_timeout_ms=1)
+        settings = Settings(vobiz_start_timeout_ms=1, vobiz_stream_auth_token=None)
 
         try:
             await run_vobiz_websocket_session(websocket, settings=settings, registry=registry)
@@ -158,6 +168,17 @@ def test_vobiz_websocket_session_times_out_without_start_event() -> None:
         assert websocket.closed
 
     asyncio.run(scenario())
+
+
+def test_vobiz_query_token_satisfies_stream_auth() -> None:
+    settings = Settings(vobiz_stream_auth_token="expected-token")
+
+    assert _stream_auth_token_for_session(QueryWebSocket("expected-token"), settings) is None
+    assert _stream_auth_token_for_session(QueryWebSocket(None), settings) == "expected-token"
+    assert (
+        _stream_auth_token_for_session(QueryWebSocket("wrong-token"), settings)
+        is _INVALID_STREAM_TOKEN
+    )
 
 
 def build_registry() -> ProviderRegistry:

@@ -98,11 +98,14 @@ class Settings(BaseSettings):
     vad_start_min_ms: int = 80
     vad_stop_min_ms: int = 350
     vad_confidence_threshold: float = 0.55
+    vad_model_path: str = "./models/silero_vad.onnx"
     min_user_speech_ms: int = 250
     min_silence_for_turn_end_ms: int = 450
     max_silence_before_force_end_ms: int = 1200
     smart_turn_enabled: bool = True
     smart_turn_threshold: float = 0.65
+    smart_turn_model_path: str = "./models/smart_turn_v3.onnx"
+    smart_turn_cpu_threads: int = 1
     end_of_turn_grace_ms: int = 250
 
     interruption_enabled: bool = True
