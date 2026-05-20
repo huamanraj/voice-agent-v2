@@ -41,6 +41,7 @@ async def vobiz_websocket(websocket: WebSocket) -> None:
             registry=registry,
             turn_detection_models=turn_detection_models,
             stream_auth_token=stream_auth_token,
+            agent_id=websocket.query_params.get("agent_id"),
         )
     except TimeoutError:
         logger.warning("vobiz_websocket_closed reason=start_timeout")
@@ -80,6 +81,7 @@ async def run_vobiz_websocket_session(
     registry: ProviderRegistry | None = None,
     turn_detection_models: TurnDetectionModels | None = None,
     stream_auth_token: str | None | object = _USE_SETTINGS_STREAM_TOKEN,
+    agent_id: str | None = None,
 ) -> SessionStats:
     runtime_settings = settings or get_settings()
     provider_registry = registry or create_default_registry()
@@ -109,6 +111,7 @@ async def run_vobiz_websocket_session(
         settings=runtime_settings,
         telephony=telephony,
         registry=provider_registry,
+        agent_id=agent_id,
         turn_detection_models=turn_detection_models,
     )
     return await orchestrator.run()

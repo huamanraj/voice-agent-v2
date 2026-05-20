@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+from voice_agent.agents import AgentProfile, apply_agent_profile, resolve_agent_profile
 from voice_agent.config import Settings
 from voice_agent.contracts.ports import TelephonyPort
 from voice_agent.core.session_orchestrator import SessionOrchestrator, SessionProviders
@@ -14,16 +15,21 @@ from voice_agent.factory.provider_registry import ProviderRegistry, create_defau
 class SessionBlueprint:
     call_id: str
     providers: ProviderSelection
+    agent: AgentProfile
 
 
 def build_session_blueprint(
     call_id: str,
     settings: Settings,
     agent_overrides: dict[str, str] | None = None,
+    agent_id: str | None = None,
 ) -> SessionBlueprint:
+    agent = resolve_agent_profile(settings, agent_id)
+    runtime_settings = apply_agent_profile(settings, agent)
     return SessionBlueprint(
         call_id=call_id,
-        providers=resolve_provider_selection(settings, agent_overrides),
+        providers=resolve_provider_selection(runtime_settings, agent_overrides),
+        agent=agent,
     )
 
 
@@ -32,22 +38,26 @@ def create_session_orchestrator(
     settings: Settings,
     registry: ProviderRegistry | None = None,
     agent_overrides: dict[str, str] | None = None,
+    agent_id: str | None = None,
     turn_detection_models: TurnDetectionModels | None = None,
 ) -> SessionOrchestrator:
     provider_registry = registry or create_default_registry()
-    selection = resolve_provider_selection(settings, agent_overrides)
+    agent = resolve_agent_profile(settings, agent_id)
+    runtime_settings = apply_agent_profile(settings, agent)
+    selection = resolve_provider_selection(runtime_settings, agent_overrides)
     providers = SessionProviders(
         telephony=provider_registry.create("telephony", selection.telephony, call_id=call_id),
-        stt=provider_registry.create("stt", selection.stt),
-        tts=provider_registry.create("tts", selection.tts),
-        llm=provider_registry.create("llm", selection.llm),
-        live_store=_create_live_store(provider_registry, selection.live_store, settings),
-        final_store=_create_final_store(provider_registry, selection.final_store, settings),
+        stt=_create_provider(provider_registry, "stt", selection.stt, runtime_settings),
+        tts=_create_provider(provider_registry, "tts", selection.tts, runtime_settings),
+        llm=_create_provider(provider_registry, "llm", selection.llm, runtime_settings),
+        live_store=_create_live_store(provider_registry, selection.live_store, runtime_settings),
+        final_store=_create_final_store(provider_registry, selection.final_store, runtime_settings),
     )
     return SessionOrchestrator(
         call_id=call_id,
         providers=providers,
-        settings=settings,
+        settings=runtime_settings,
+        agent=agent,
         turn_detection_models=turn_detection_models,
     )
 
@@ -58,24 +68,43 @@ def create_session_orchestrator_with_telephony(
     telephony: TelephonyPort,
     registry: ProviderRegistry | None = None,
     agent_overrides: dict[str, str] | None = None,
+    agent_id: str | None = None,
     turn_detection_models: TurnDetectionModels | None = None,
 ) -> SessionOrchestrator:
     provider_registry = registry or create_default_registry()
-    selection = resolve_provider_selection(settings, agent_overrides)
+    agent = resolve_agent_profile(settings, agent_id)
+    runtime_settings = apply_agent_profile(settings, agent)
+    selection = resolve_provider_selection(runtime_settings, agent_overrides)
     providers = SessionProviders(
         telephony=telephony,
-        stt=provider_registry.create("stt", selection.stt),
-        tts=provider_registry.create("tts", selection.tts),
-        llm=provider_registry.create("llm", selection.llm),
-        live_store=_create_live_store(provider_registry, selection.live_store, settings),
-        final_store=_create_final_store(provider_registry, selection.final_store, settings),
+        stt=_create_provider(provider_registry, "stt", selection.stt, runtime_settings),
+        tts=_create_provider(provider_registry, "tts", selection.tts, runtime_settings),
+        llm=_create_provider(provider_registry, "llm", selection.llm, runtime_settings),
+        live_store=_create_live_store(provider_registry, selection.live_store, runtime_settings),
+        final_store=_create_final_store(provider_registry, selection.final_store, runtime_settings),
     )
     return SessionOrchestrator(
         call_id=call_id,
         providers=providers,
-        settings=settings,
+        settings=runtime_settings,
+        agent=agent,
         turn_detection_models=turn_detection_models,
     )
+
+
+def _create_provider(
+    provider_registry: ProviderRegistry,
+    category: str,
+    provider_name: str,
+    settings: Settings,
+):
+    if (category, provider_name) in {
+        ("stt", "deepgram"),
+        ("tts", "cartesia"),
+        ("llm", "litellm"),
+    }:
+        return provider_registry.create(category, provider_name, settings=settings)
+    return provider_registry.create(category, provider_name)
 
 
 def _create_live_store(provider_registry: ProviderRegistry, provider_name: str, settings: Settings):

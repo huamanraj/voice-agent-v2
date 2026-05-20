@@ -40,6 +40,9 @@ async def readyz(
 
 @router.get("/vobiz/answer")
 @router.post("/vobiz/answer")
-async def vobiz_answer(settings: Settings = Depends(settings_dependency)) -> Response:
+async def vobiz_answer(
+    agent_id: str | None = None,
+    settings: Settings = Depends(settings_dependency),
+) -> Response:
     """VoiceXML webhook: tells Vobiz which WebSocket receives call audio."""
-    return Response(content=vobiz_answer_xml(settings), media_type="application/xml")
+    return Response(content=vobiz_answer_xml(settings, agent_id=agent_id), media_type="application/xml")

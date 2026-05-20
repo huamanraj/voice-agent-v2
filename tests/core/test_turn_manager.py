@@ -67,7 +67,7 @@ def test_turn_manager_allows_expected_short_yes_no_answer() -> None:
     )
 
     manager.handle_transcript(transcript("haan", end_ms=1300))
-    turn = manager.emit_turn(timestamp_ms=1600)
+    turn = manager.emit_turn(timestamp_ms=1650)
 
     assert turn is not None
     assert turn.text == "haan"
@@ -137,3 +137,69 @@ def test_turn_manager_requires_explicit_smart_turn_result() -> None:
 
     assert turn is not None
     assert turn.text == "I want policy details today please"
+
+
+def test_turn_manager_waits_for_final_after_vad_smart_turn() -> None:
+    settings = Settings(
+        min_user_speech_ms=100,
+        min_silence_for_turn_end_ms=250,
+        max_silence_before_force_end_ms=1000,
+        smart_turn_threshold=0.65,
+    )
+    manager = TurnManager("call-turn", settings)
+
+    manager.handle_speech_start(SpeechStart("call-turn", 1000, "vad", 0.9))
+    manager.handle_speech_stop(SpeechStop("call-turn", 1400, "vad", 0.9))
+    manager.handle_smart_turn(
+        SmartTurnResult(
+            call_id="call-turn",
+            turn_id=1,
+            is_complete=True,
+            confidence=0.9,
+            reason="smart_turn_v3_onnx",
+        )
+    )
+    manager.handle_transcript(
+        transcript("Why are you", is_final=False, start_ms=1000, end_ms=1400),
+        received_ms=1500,
+    )
+
+    assert manager.emit_turn(timestamp_ms=1500) is None
+    assert manager.evaluate(timestamp_ms=1500).reason == "waiting_for_final_transcript"
+
+    manager.handle_transcript(
+        transcript("Why are you repeating", is_final=True, start_ms=1000, end_ms=1600),
+        received_ms=1600,
+    )
+    turn = manager.emit_turn(timestamp_ms=1650)
+
+    assert turn is not None
+    assert turn.text == "Why are you repeating"
+
+
+def test_turn_manager_ignores_late_duplicate_transcript_after_emit() -> None:
+    settings = Settings(
+        min_user_speech_ms=100,
+        min_silence_for_turn_end_ms=250,
+        max_silence_before_force_end_ms=1000,
+    )
+    manager = TurnManager("call-turn", settings)
+
+    manager.handle_speech_start(SpeechStart("call-turn", 1000, "vad", 0.9))
+    manager.handle_speech_stop(SpeechStop("call-turn", 1400, "vad", 0.9))
+    manager.handle_smart_turn(
+        SmartTurnResult(
+            call_id="call-turn",
+            turn_id=1,
+            is_complete=True,
+            confidence=0.9,
+            reason="smart_turn_v3_onnx",
+        )
+    )
+    manager.handle_transcript(transcript("Hello.", start_ms=1000, end_ms=1500), received_ms=1500)
+    turn = manager.emit_turn(timestamp_ms=1650)
+    assert turn is not None
+
+    manager.handle_transcript(transcript("Hello.", start_ms=1000, end_ms=1500), received_ms=1600)
+
+    assert manager.emit_turn(timestamp_ms=1600) is None

@@ -43,6 +43,13 @@ class SequenceManager:
         self._invalidated_sequence_ids.update(invalidated)
         return invalidated
 
+    def retire(self, sequence_id: int | None) -> bool:
+        if sequence_id is None or sequence_id == SYSTEM_SEQUENCE_ID:
+            return False
+        was_valid = sequence_id in self._valid_sequence_ids
+        self._valid_sequence_ids.discard(sequence_id)
+        return was_valid
+
     def valid_sequences(self) -> frozenset[int]:
         return frozenset(self._valid_sequence_ids)
 

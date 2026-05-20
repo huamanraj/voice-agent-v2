@@ -5,6 +5,7 @@ description = "Production-ready telephony AI voice agent"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "boto3>=1.43.11",
     "fastapi>=0.136.1",
     "litellm>=1.73.0",
     "numpy>=2.3.0",

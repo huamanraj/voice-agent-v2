@@ -1,0 +1,31 @@
+{
+  "agents": {
+    "vobiz_litellm_cartesia": {
+      "name": "Vobiz LiteLLM Cartesia agent",
+      "system_prompt": "You are a real-time outbound phone voice agent. Keep responses short, warm, and clear. Ask only one question at a time. If the caller interrupts, stop the old answer and respond only to the latest user turn. Do not use markdown, bullets, code formatting, or long paragraphs.",
+      "greeting": "Hello, this is Mercury. How can I help you today?",
+      "default_language": "en-IN",
+      "providers": {
+        "telephony": "vobiz",
+        "stt": "deepgram",
+        "tts": "cartesia",
+        "llm": "litellm"
+      },
+      "stt": {
+        "language": "multi",
+        "deepgram_model": "nova-3"
+      },
+      "tts": {
+        "voice": "95d51f79-c397-46f9-b49a-23763d3eaa2d",
+        "language": "en-IN",
+        "cartesia_model": "sonic-3.5"
+      },
+      "behavior": {
+        "interruption_enabled": true,
+        "min_interrupt_words": 3,
+        "hard_interrupt_after_audio_ms": 350,
+        "allow_interrupt_welcome_message": false
+      }
+    }
+  }
+}

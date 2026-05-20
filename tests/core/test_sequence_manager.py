@@ -26,3 +26,13 @@ def test_sequence_manager_invalidates_pending_sequences_but_keeps_system_sequenc
     assert not manager.is_valid(second)
     assert manager.is_valid(SYSTEM_SEQUENCE_ID)
     assert manager.invalidated_sequences() == {first, second}
+
+
+def test_sequence_manager_retires_completed_sequence() -> None:
+    manager = SequenceManager()
+    sequence_id = manager.create_sequence()
+
+    assert manager.retire(sequence_id)
+    assert not manager.is_valid(sequence_id)
+    assert manager.is_valid(SYSTEM_SEQUENCE_ID)
+    assert manager.invalidate_pending("interruption") == set()

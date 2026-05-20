@@ -18,6 +18,7 @@ from voice_agent.core.turn_detection.expected_answer import (
 from voice_agent.core.turn_detection.rules import (
     ends_with_incomplete_connector,
     is_complete_short_answer,
+    normalize_text,
     word_count,
 )
 from voice_agent.core.turn_detection.smart_turn_runner import (
@@ -50,6 +51,10 @@ class TurnState:
         final_text = " ".join(fragment for fragment in self.final_fragments if fragment).strip()
         return final_text or self.interim_text.strip()
 
+    @property
+    def has_final_text(self) -> bool:
+        return any(fragment.strip() for fragment in self.final_fragments)
+
 
 @dataclass(frozen=True, slots=True)
 class TurnDecision:
@@ -70,6 +75,8 @@ class TurnManager:
         self.expected_answer = expected_answer
         self.smart_turn_runner = smart_turn_runner
         self.state = TurnState(call_id=call_id)
+        self._last_emitted_text: str = ""
+        self._last_emitted_ms: int | None = None
 
     def set_expected_answer(self, expected_answer: ExpectedAnswer) -> None:
         self.expected_answer = expected_answer
@@ -88,16 +95,22 @@ class TurnManager:
         if event.source == "stt":
             self.state.stt_speech_final_seen = True
 
-    def handle_transcript(self, event: TranscriptEvent) -> None:
-        event_ms = event.end_ms or event.start_ms or now_ms()
+    def handle_transcript(self, event: TranscriptEvent, *, received_ms: int | None = None) -> None:
+        event_ms = received_ms or event.end_ms or event.start_ms or now_ms()
+        if self.state.user_started_ms is None and self._is_late_duplicate(event.text, event_ms):
+            return
         if self.state.user_started_ms is None:
-            self.state.user_started_ms = event.start_ms or event_ms
+            self.state.user_started_ms = received_ms or event.start_ms or event_ms
         self.state.last_transcript_ms = event_ms
 
         if event.is_final:
             text = event.text.strip()
             if text:
-                self.state.final_fragments.append(text)
+                is_new_fragment = not self.state.final_fragments or (
+                    normalize_text(self.state.final_fragments[-1]) != normalize_text(text)
+                )
+                if is_new_fragment:
+                    self.state.final_fragments.append(text)
                 self.state.last_final_ms = event_ms
                 self.state.stt_speech_final_seen = True
                 self.state.language = event.language
@@ -121,6 +134,10 @@ class TurnManager:
         text = self.state.text
         if not text:
             return TurnDecision(False, "no_text")
+        if not self.state.has_final_text:
+            transcript_age_ms = max(0, ts_ms - (self.state.last_transcript_ms or ts_ms))
+            if transcript_age_ms < self.settings.max_silence_before_force_end_ms:
+                return TurnDecision(False, "waiting_for_final_transcript")
 
         speech_duration_ms = max(0, (self.state.last_speech_ms or ts_ms) - self.state.user_started_ms)
         if speech_duration_ms < self.settings.min_user_speech_ms:
@@ -178,6 +195,8 @@ class TurnManager:
             start_ms=self.state.user_started_ms,
             end_ms=timestamp_ms or now_ms(),
         )
+        self._last_emitted_text = _dedupe_text(turn.text)
+        self._last_emitted_ms = turn.end_ms
         self._reset_for_next_turn(keep_turn_id=True)
         return turn
 
@@ -189,3 +208,14 @@ class TurnManager:
     def _reset_for_next_turn(self, keep_turn_id: bool) -> None:
         turn_id = self.state.turn_id if keep_turn_id else 0
         self.state = TurnState(call_id=self.call_id, turn_id=turn_id)
+
+    def _is_late_duplicate(self, text: str, event_ms: int) -> bool:
+        if not self._last_emitted_text or self._last_emitted_ms is None:
+            return False
+        if event_ms - self._last_emitted_ms > self.settings.max_silence_before_force_end_ms:
+            return False
+        return _dedupe_text(text) == self._last_emitted_text
+
+
+def _dedupe_text(text: str) -> str:
+    return normalize_text(text).strip(".,!?। ")

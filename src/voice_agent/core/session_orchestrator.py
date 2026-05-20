@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from voice_agent.agents import AgentProfile
 from voice_agent.audio.audio_router import AudioRouter
 from voice_agent.audio.rolling_buffer import RollingAudioBuffer
 from voice_agent.config import Settings, get_settings
@@ -38,7 +39,7 @@ from voice_agent.core.queues.queue_manager import (
     put_packet,
     queue_sizes_from_settings,
 )
-from voice_agent.core.interruption.output_gate import OutputDecision, OutputGate
+from voice_agent.core.interruption.output_gate import OutputDecision, OutputGate, OutputGateState
 from voice_agent.core.interruption.interruption_manager import (
     InterruptionManager,
     InterruptionOutcome,
@@ -93,6 +94,7 @@ class SessionOrchestrator:
     call_id: str
     providers: SessionProviders
     settings: Settings | None = None
+    agent: AgentProfile | None = None
     turn_detection_models: TurnDetectionModels | None = None
     state: CallState = field(init=False)
     queues: SessionQueues = field(init=False)
@@ -114,6 +116,7 @@ class SessionOrchestrator:
     _active_llm_response_id: str | None = field(init=False)
     _active_llm_sequence_id: int | None = field(init=False)
     _turn_check_task: asyncio.Task[None] | None = field(init=False)
+    _interruption_cleanup_done: asyncio.Event = field(init=False)
     _vad_stream: Any | None = field(init=False)
     _session_started_ms: int = field(init=False)
     _session_ended_ms: int | None = field(init=False)
@@ -166,6 +169,8 @@ class SessionOrchestrator:
         self._active_llm_response_id = None
         self._active_llm_sequence_id = None
         self._turn_check_task = None
+        self._interruption_cleanup_done = asyncio.Event()
+        self._interruption_cleanup_done.set()
         self._session_started_ms = now_ms()
         self._session_ended_ms = None
         self._first_media_frame_seen = False
@@ -185,7 +190,11 @@ class SessionOrchestrator:
         self._log("provider_connected", provider=self.providers.telephony.provider_name)
         await self.providers.stt.start(self.call_id, language_hint=self.settings.deepgram_language)
         self._log("provider_connected", provider=self.providers.stt.provider_name)
-        await self.providers.tts.start(self.call_id, voice="mock-voice", language="en-IN")
+        await self.providers.tts.start(
+            self.call_id,
+            voice=self.settings.agent_tts_voice,
+            language=self.settings.agent_tts_language or self.settings.agent_default_language,
+        )
         self._log("provider_connected", provider=self.providers.tts.provider_name)
         self._log(
             "turn_detection_models",
@@ -230,11 +239,53 @@ class SessionOrchestrator:
         self.state = CallState.LISTENING
         self._log("call_listening")
         await self._save_live_state()
+        await self._enqueue_agent_greeting()
 
     async def run(self) -> SessionStats:
         await self.start()
         await self.wait_closed()
         return self.stats
+
+    async def _enqueue_agent_greeting(self) -> None:
+        greeting = (self.settings.agent_greeting or "").strip()
+        if not greeting:
+            return
+
+        sequence_id = self.sequence_manager.create_sequence()
+        message_id = f"{self.call_id}-greeting-{sequence_id}"
+        response_id = f"{self.call_id}-greeting-response-{sequence_id}"
+        self.playback_tracker.start_message(message_id=message_id, sequence_id=sequence_id)
+        self.playback_tracker.append_generated_text(message_id, greeting)
+        self.context_manager.start_assistant_turn(message_id=message_id, sequence_id=sequence_id)
+        self.context_manager.append_assistant_text(message_id, greeting)
+        if self.settings.allow_interrupt_welcome_message:
+            self.interruption_manager.track_response(sequence_id, response_id, message_id)
+        self._log(
+            "agent_greeting_started",
+            sequence_id=sequence_id,
+            message_id=message_id,
+            text_length=len(greeting),
+        )
+        await put_packet(
+            self.queues.tts_request,
+            self._packet(
+                "llm_sentence",
+                {"text": greeting, "message_id": message_id},
+                sequence_id=sequence_id,
+                request_id=response_id,
+            ),
+            BackpressurePolicy.DROP_OLDEST,
+        )
+        await put_packet(
+            self.queues.tts_request,
+            self._packet(
+                "llm_response_end",
+                {"message_id": message_id},
+                sequence_id=sequence_id,
+                request_id=response_id,
+            ),
+            BackpressurePolicy.DROP_OLDEST,
+        )
 
     async def wait_closed(self) -> None:
         if not self.tasks:
@@ -493,7 +544,16 @@ class SessionOrchestrator:
             if not isinstance(transcript, TranscriptEvent):
                 raise TypeError("transcript_event packet must contain a TranscriptEvent.")
 
-            self.turn_manager.handle_transcript(transcript)
+            if self._vad_stream is not None and self.turn_manager.state.user_started_ms is None:
+                self._log(
+                    "late_transcript_ignored",
+                    provider=transcript.provider,
+                    text=transcript.text if self.settings.log_full_transcripts else None,
+                )
+                self.queues.transcript_event.task_done()
+                continue
+
+            self.turn_manager.handle_transcript(transcript, received_ms=packet.timestamp_ms)
             await self._emit_turn_if_ready()
             self.queues.transcript_event.task_done()
 
@@ -549,6 +609,9 @@ class SessionOrchestrator:
         silence_ms = max(0, ts_ms - silence_start_ms)
         if decision.reason == "not_enough_silence":
             return max(1, self.settings.min_silence_for_turn_end_ms - silence_ms)
+        if decision.reason == "waiting_for_final_transcript":
+            transcript_age_ms = max(0, ts_ms - (state.last_transcript_ms or ts_ms))
+            return max(1, self.settings.max_silence_before_force_end_ms - transcript_age_ms)
         if decision.reason in {"smart_turn_incomplete", "incomplete_connector"}:
             return max(1, self.settings.max_silence_before_force_end_ms - silence_ms)
         return None
@@ -556,6 +619,9 @@ class SessionOrchestrator:
     async def _emit_user_turn(self, turn: UserTurnFinal) -> None:
         self._cancel_turn_check()
         self.stats.user_turns_finalized += 1
+        if self.interruption_manager.state.agent_is_speaking and self.settings.interruption_enabled:
+            await self.output_gate.set_wait()
+            self._log("turn_waiting_for_interruption_decision", turn_id=turn.turn_id)
         self.latency_tracker.mark_end_of_turn(turn.turn_id, now_ms())
         self._log(
             "user_turn_final",
@@ -603,6 +669,8 @@ class SessionOrchestrator:
                 self.queues.turn_event.task_done()
 
     async def _run_llm_response(self, turn: UserTurnFinal) -> None:
+        await self._wait_for_output_resume(turn.turn_id)
+        await self._invalidate_prior_output_for_new_turn(turn.turn_id)
         self.state = CallState.THINKING
         sequence_id = self.sequence_manager.create_sequence()
         response_id = f"{self.call_id}-response-{sequence_id}"
@@ -684,6 +752,52 @@ class SessionOrchestrator:
             await self.providers.llm.cancel(response_id)
             self._log("llm_cancel_sent", turn_id=turn.turn_id, sequence_id=sequence_id, provider=self.providers.llm.provider_name)
             raise
+
+    async def _wait_for_output_resume(self, turn_id: int) -> None:
+        timeout_seconds = max(
+            0.1,
+            (
+                self.settings.hard_interrupt_after_audio_ms
+                + self.settings.output_gate_wait_timeout_ms
+                + 1000
+            )
+            / 1000,
+        )
+        started = asyncio.get_running_loop().time()
+        while (
+            not self._interruption_cleanup_done.is_set()
+            or self.output_gate.state != OutputGateState.SEND
+            or self.interruption_manager.state.user_may_be_interrupting
+        ):
+            if asyncio.get_running_loop().time() - started >= timeout_seconds:
+                self._log("interruption_resume_wait_timeout", turn_id=turn_id)
+                break
+            await asyncio.sleep(0.01)
+
+    async def _invalidate_prior_output_for_new_turn(self, turn_id: int) -> None:
+        invalidated = self.sequence_manager.invalidate_pending("new_user_turn")
+        if not invalidated:
+            return
+        await self.output_gate.block_sequences(invalidated)
+        self.stats.pending_tts_requests_purged += self._purge_invalid_packets(self.queues.tts_request)
+        self.stats.pending_tts_audio_purged += self._purge_invalid_packets(self.queues.tts_audio)
+        active_response = self.interruption_manager.active_response
+        if active_response is not None and active_response.sequence_id in invalidated:
+            await self.providers.tts.cancel(active_response.message_id, "new_user_turn")
+            await self.providers.llm.cancel(active_response.response_id)
+            self.interruption_manager.mark_agent_response_finished(active_response.sequence_id)
+            self._log(
+                "active_response_cancelled_for_new_turn",
+                turn_id=turn_id,
+                sequence_id=active_response.sequence_id,
+                message_id=active_response.message_id,
+            )
+        self._log(
+            "pending_output_invalidated_for_new_turn",
+            turn_id=turn_id,
+            sequence_id=max(invalidated),
+            invalidated_count=len(invalidated),
+        )
 
     async def _tracked_llm_tokens(
         self,
@@ -906,6 +1020,8 @@ class SessionOrchestrator:
                         self._packet("interruption_started", {"event": decision.event}),
                         BackpressurePolicy.DROP_METRICS,
                     )
+                self._interruption_cleanup_done.set()
+                await self.output_gate.set_send()
             elif decision.outcome == InterruptionOutcome.REJECTED:
                 self.stats.interruptions_rejected += 1
                 if isinstance(decision.event, InterruptionRejected):
@@ -919,9 +1035,11 @@ class SessionOrchestrator:
                         self._packet("interruption_rejected", {"event": decision.event}),
                         BackpressurePolicy.DROP_METRICS,
                     )
+                self._interruption_cleanup_done.set()
             self.queues.interruption_event.task_done()
 
     async def _handle_confirmed_interruption(self, event: InterruptionStarted) -> None:
+        self._interruption_cleanup_done.clear()
         self.stats.pending_tts_requests_purged += self._purge_invalid_packets(self.queues.tts_request)
         self.stats.pending_tts_audio_purged += self._purge_invalid_packets(self.queues.tts_audio)
         playback = self.playback_tracker.mark_interrupted(event)
@@ -970,6 +1088,9 @@ class SessionOrchestrator:
                 self.latency_tracker.mark_first_audio_played(None, event.ts_ms)
             elif event.event_type == "checkpoint_played":
                 self.latency_tracker.mark_final_audio_played(None, event.ts_ms)
+                if playback is not None:
+                    self.interruption_manager.mark_agent_response_finished(playback.sequence_id)
+                    self.sequence_manager.retire(playback.sequence_id)
                 self._log(
                     "checkpoint_played",
                     sequence_id=event.sequence_id,

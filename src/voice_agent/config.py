@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     final_store_provider: ProviderName = "memory"
     logger_provider: ProviderName = "file"
 
+    default_agent_id: str = "vobiz_litellm_cartesia"
+    agent_config_path: str = "./config/agents.json"
+    agent_id: str = "default"
+    agent_name: str = "Default phone agent"
+    agent_greeting: str | None = None
+    agent_default_language: str = "en-IN"
+    agent_tts_voice: str = "mock-voice"
+    agent_tts_language: str | None = None
+
     vobiz_api_base_url: str = "https://api.vobiz.ai"
     vobiz_auth_id: str | None = None
     vobiz_auth_token: str | None = None
