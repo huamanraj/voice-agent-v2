@@ -71,6 +71,7 @@ def test_assistant_manager_runs_post_call_tasks_after_conversation() -> None:
                 min_silence_for_turn_end_ms=0,
                 smart_turn_enabled=False,
                 llm_sentence_timeout_ms=1,
+                end_call_listener_enabled=False,
             ),
         )
         await telephony.enqueue_audio(

@@ -7,6 +7,7 @@ import pytest
 
 from voice_agent.audio.converter import silence_bytes
 from voice_agent.contracts.audio import AudioFrame
+from voice_agent.contracts.errors import CallEndedError
 from voice_agent.contracts.ports import TelephonyPort
 from voice_agent.factory.provider_registry import create_default_registry
 from voice_agent.providers.telephony import VobizTelephony
@@ -173,6 +174,27 @@ def test_vobiz_checkpoint_receives_played_stream_event() -> None:
     asyncio.run(scenario())
 
 
+def test_vobiz_played_stream_without_sequence_number_uses_checkpoint_name() -> None:
+    async def scenario() -> None:
+        websocket = FakeVobizWebSocket()
+        adapter = VobizTelephony(websocket)
+
+        await websocket.feed_json(start_packet())
+        await adapter.start()
+        await wait_until(lambda: adapter.stream_id == "stream-123")
+
+        await adapter.send_checkpoint("response-no-seq")
+        await websocket.feed_json({"event": "playedStream", "name": "response-no-seq"})
+        playback_event = await asyncio.wait_for(anext(adapter.playback_events()), 0.2)
+
+        assert playback_event.event_type == "checkpoint_played"
+        assert playback_event.checkpoint_id == "response-no-seq"
+        assert playback_event.sequence_id == 0
+        await adapter.stop("test_done")
+
+    asyncio.run(scenario())
+
+
 def test_vobiz_clear_audio_waits_for_ack_without_blocking_forever() -> None:
     async def scenario() -> None:
         websocket = FakeVobizWebSocket()
@@ -291,6 +313,59 @@ def test_vobiz_send_failure_is_recorded_and_raised() -> None:
             await adapter.send_audio(frame)
 
         assert any(error.error_type == "send_failed" for error in adapter.errors)
+
+    asyncio.run(scenario())
+
+
+def test_vobiz_send_after_remote_stop_is_call_ended() -> None:
+    async def scenario() -> None:
+        websocket = FakeVobizWebSocket()
+        adapter = VobizTelephony(websocket)
+        frame = AudioFrame(
+            call_id="call-123",
+            data=silence_bytes("mulaw_8k", 20),
+            timestamp_ms=1000,
+            sample_rate=8000,
+            codec="mulaw_8k",
+            duration_ms=20,
+        )
+
+        await websocket.feed_json(start_packet())
+        await websocket.feed_json({"event": "stop"})
+        await adapter.start()
+        await wait_until(lambda: adapter.stopped)
+
+        with pytest.raises(CallEndedError):
+            await adapter.send_audio(frame)
+
+        assert sent_packets(websocket) == []
+        assert adapter.stop_reason == "remote_stop"
+
+    asyncio.run(scenario())
+
+
+def test_vobiz_hangup_calls_api_and_stops_stream() -> None:
+    async def scenario() -> None:
+        websocket = FakeVobizWebSocket()
+        called: list[str] = []
+
+        async def hangup_call(call_id: str) -> dict[str, str]:
+            called.append(call_id)
+            return {}
+
+        adapter = VobizTelephony(websocket, hangup_call=hangup_call)
+
+        await websocket.feed_json(start_packet())
+        await adapter.start()
+        await wait_until(lambda: adapter.stream_id == "stream-123")
+
+        await adapter.hangup("end_call_listener")
+
+        assert called == ["call-123"]
+        assert adapter.stopped
+        assert adapter.stop_reason == "end_call_listener"
+        assert websocket.closed
+        assert sent_packets(websocket) == [{"event": "stop", "streamId": "stream-123"}]
 
     asyncio.run(scenario())
 

@@ -63,6 +63,14 @@ class VobizOutboundClient:
         request = self._build_request(call)
         return await asyncio.to_thread(self._send_request, request)
 
+    async def hangup_call(self, call_uuid: str) -> dict[str, Any]:
+        self._validate_credentials()
+        call_id = call_uuid.strip()
+        if not call_id:
+            raise ValueError("call_uuid is required for Vobiz hangup.")
+        request = self._build_hangup_request(call_id)
+        return await asyncio.to_thread(self._send_request, request)
+
     def _build_request(self, call: VobizOutboundCall) -> Request:
         assert self.settings.vobiz_auth_id is not None
         assert self.settings.vobiz_auth_token is not None
@@ -73,6 +81,18 @@ class VobizOutboundClient:
             method="POST",
             headers={
                 "Content-Type": "application/json",
+                "X-Auth-ID": self.settings.vobiz_auth_id,
+                "X-Auth-Token": self.settings.vobiz_auth_token,
+            },
+        )
+
+    def _build_hangup_request(self, call_uuid: str) -> Request:
+        assert self.settings.vobiz_auth_id is not None
+        assert self.settings.vobiz_auth_token is not None
+        return Request(
+            url=f"{self._call_url()}{call_uuid}/",
+            method="DELETE",
+            headers={
                 "X-Auth-ID": self.settings.vobiz_auth_id,
                 "X-Auth-Token": self.settings.vobiz_auth_token,
             },

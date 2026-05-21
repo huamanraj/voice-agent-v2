@@ -60,5 +60,8 @@ class MockTTS:
     async def cancel(self, message_id: str, reason: str) -> None:
         self.cancelled_message_ids.add(message_id)
 
+    async def health_check(self) -> bool:
+        return self.call_id is not None
+
     async def stop(self) -> None:
         return None

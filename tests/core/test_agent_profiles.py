@@ -17,7 +17,7 @@ def test_local_agent_profile_overrides_runtime_settings() -> None:
                     "default_language": "hi-IN",
                     "providers": {
                         "stt": "deepgram",
-                        "tts": "cartesia",
+                        "tts": "sarvam",
                         "llm": "litellm",
                     },
                     "llm": {
@@ -30,9 +30,9 @@ def test_local_agent_profile_overrides_runtime_settings() -> None:
                         "deepgram_model": "nova-3",
                     },
                     "tts": {
-                        "voice": "voice-from-profile",
+                        "voice": "simran",
                         "language": "hi-IN",
-                        "cartesia_model": "sonic-3.5",
+                        "sarvam_model": "bulbul:v3",
                     },
                     "behavior": {
                         "min_interrupt_words": 2,
@@ -53,12 +53,14 @@ def test_local_agent_profile_overrides_runtime_settings() -> None:
         assert runtime_settings.llm_system_prompt == "Ask one sales question at a time."
         assert runtime_settings.agent_greeting == "Hello from sales."
         assert runtime_settings.stt_provider == "deepgram"
-        assert runtime_settings.tts_provider == "cartesia"
+        assert runtime_settings.tts_provider == "sarvam"
         assert runtime_settings.llm_provider == "litellm"
         assert runtime_settings.talker_model == "openai/gpt-4.1-mini"
-        assert runtime_settings.agent_tts_voice == "voice-from-profile"
+        assert runtime_settings.agent_tts_voice == "simran"
         assert runtime_settings.deepgram_language == "multi"
-        assert runtime_settings.cartesia_model == "sonic-3.5"
+        assert runtime_settings.sarvam_tts_model == "bulbul:v3"
+        assert runtime_settings.sarvam_tts_target_language_code == "hi-IN"
+        assert runtime_settings.sarvam_tts_speaker == "simran"
         assert runtime_settings.min_interrupt_words == 2
         assert runtime_settings.force_interrupt_phrases == ("ruk jao",)
     finally:

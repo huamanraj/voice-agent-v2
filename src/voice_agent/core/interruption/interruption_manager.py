@@ -163,7 +163,10 @@ class InterruptionManager:
             return await self.confirm("force_interrupt_phrase", phrase, event)
         if phrase.word_count >= self.settings.min_interrupt_words:
             return await self.confirm("word_count_threshold", phrase, event)
-        if audio_ms >= self.settings.hard_interrupt_after_audio_ms and phrase.word_count > 0:
+        if (
+            audio_ms >= self.settings.hard_interrupt_after_audio_ms
+            and phrase.word_count >= self.settings.min_interrupt_words
+        ):
             return await self.confirm("long_user_speech", phrase, event)
         return InterruptionDecision(InterruptionOutcome.PENDING, "not_enough_words", phrase)
 

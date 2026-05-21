@@ -13,6 +13,7 @@ from voice_agent.contracts.audio import AudioCodec, AudioFrame
 from voice_agent.contracts.capabilities import TTSCapabilities
 from voice_agent.contracts.events import ProviderError
 from voice_agent.contracts.packets import now_ms
+from voice_agent.providers.health import websocket_ping
 
 
 class CartesiaWebSocket(Protocol):
@@ -41,6 +42,7 @@ class CartesiaTTS:
         voice_id: str | None = None,
         websocket_factory: WebSocketFactory | None = None,
         first_audio_timeout_seconds: float | None = None,
+        health_timeout_seconds: float | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.api_key = api_key if api_key is not None else self.settings.cartesia_api_key
@@ -50,6 +52,11 @@ class CartesiaTTS:
             first_audio_timeout_seconds
             if first_audio_timeout_seconds is not None
             else self.settings.tts_first_audio_timeout_ms / 1000
+        )
+        self.health_timeout_seconds = (
+            health_timeout_seconds
+            if health_timeout_seconds is not None
+            else self.settings.provider_health_timeout_ms / 1000
         )
 
         self.call_id: str | None = None
@@ -179,6 +186,14 @@ class CartesiaTTS:
                 retryable=True,
                 details={"message_id": message_id, "reason": reason, "exception": exc.__class__.__name__},
             )
+
+    async def health_check(self) -> bool:
+        if not self.started or self.stopped:
+            return False
+        websocket = self._websocket
+        if websocket is None:
+            return False
+        return await websocket_ping(websocket, timeout_seconds=self.health_timeout_seconds)
 
     async def stop(self) -> None:
         if self.stopped:

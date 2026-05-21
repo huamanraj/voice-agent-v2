@@ -67,6 +67,9 @@ class MockSTT:
     async def update_language_hint(self, language: str) -> None:
         self.language_hint = language
 
+    async def health_check(self) -> bool:
+        return self.call_id is not None
+
     async def stop(self) -> None:
         await self._transcripts.put(None)
         await self._speech_events.put(None)

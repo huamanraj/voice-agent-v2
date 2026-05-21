@@ -20,7 +20,7 @@ def test_checkpoint_played_marks_full_message_as_heard() -> None:
         ),
         timestamp_ms=1000,
     )
-    tracker.mark_checkpoint_sent("message-1", "message-1")
+    tracker.mark_checkpoint_sent("message-1", "message-1", timestamp_ms=1800)
 
     playback = tracker.handle_playback_event(
         PlaybackEvent(
@@ -37,6 +37,32 @@ def test_checkpoint_played_marks_full_message_as_heard() -> None:
     assert tracker.heard_text("message-1") == "Your appointment is confirmed."
     assert playback.checkpoints_played == ["message-1"]
     assert not playback.interrupted
+    assert playback.checkpoint_ack_latency_ms == [100]
+
+
+def test_estimated_playback_completion_marks_full_message_as_heard() -> None:
+    tracker = PlaybackTracker(call_id="call-estimated")
+    tracker.start_message(message_id="message-estimated", sequence_id=1, started_ms=1000)
+    tracker.append_generated_text("message-estimated", "Your appointment is confirmed.")
+    tracker.mark_audio_sent(
+        AudioFrame(
+            call_id="call-estimated",
+            data=b"audio",
+            timestamp_ms=1000,
+            sample_rate=8000,
+            codec="mulaw_8k",
+            sequence_id=1,
+            duration_ms=800,
+            meta={"message_id": "message-estimated"},
+        ),
+        timestamp_ms=1000,
+    )
+    tracker.mark_checkpoint_sent("message-estimated", "message-estimated", timestamp_ms=1800)
+
+    playback = tracker.mark_estimated_fully_played("message-estimated", timestamp_ms=2600)
+
+    assert playback is not None
+    assert tracker.heard_text("message-estimated") == "Your appointment is confirmed."
 
 
 def test_interruption_estimates_partial_text_from_played_audio_ratio() -> None:

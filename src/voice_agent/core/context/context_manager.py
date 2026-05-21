@@ -4,6 +4,12 @@ from dataclasses import dataclass
 
 from voice_agent.contracts.events import UserTurnFinal
 from voice_agent.contracts.packets import now_ms
+from voice_agent.core.context.prompt_builder import (
+    ConversationLine,
+    DynamicPromptInput,
+    LatestContext,
+    build_dynamic_system_prompt,
+)
 from voice_agent.core.context.slots import SlotTracker
 from voice_agent.core.context.summarizer import ConversationSummarizer, SummaryTurn
 from voice_agent.core.playback.playback_tracker import MessagePlayback, estimate_heard_text
@@ -34,7 +40,7 @@ class ContextManager:
         self,
         *,
         system_prompt: str,
-        max_recent_turns: int = 12,
+        max_recent_turns: int = 60,
         summary_max_chars: int = 1200,
     ) -> None:
         self.system_prompt = system_prompt
@@ -59,6 +65,16 @@ class ContextManager:
             )
         )
         self._trim()
+
+    def replace_user_turn(self, turn: UserTurnFinal) -> None:
+        for record in reversed(self.user_turns):
+            if record.turn_id == turn.turn_id:
+                record.text = turn.text
+                record.timestamp_ms = turn.end_ms or now_ms()
+                record.confidence = turn.confidence
+                record.language = turn.language
+                return
+        self.append_user_turn(turn)
 
     def start_assistant_turn(self, *, message_id: str, sequence_id: int) -> AssistantTurnRecord:
         existing = self._assistant_by_message_id.get(message_id)
@@ -92,36 +108,64 @@ class ContextManager:
         return record
 
     def build_llm_messages(self, current_user_turn: UserTurnFinal | None = None) -> list[dict[str, str]]:
-        messages: list[dict[str, str]] = [{"role": "system", "content": self.system_prompt}]
-        if self.summary_text:
-            messages.append({"role": "system", "content": f"Earlier call context:\n{self.summary_text}"})
-        slot_text = self.slots.to_prompt_text()
-        if slot_text:
-            messages.append({"role": "system", "content": f"Known call details:\n{slot_text}"})
-        records = self._recent_records(current_user_turn)
-        for role, content in records:
-            if content:
-                messages.append({"role": role, "content": content})
-        return messages
+        return [{"role": "system", "content": self.build_system_prompt(current_user_turn)}]
 
-    def _recent_records(self, current_user_turn: UserTurnFinal | None) -> list[tuple[str, str]]:
-        records: list[tuple[int, int, str, str]] = []
+    def build_system_prompt(self, current_user_turn: UserTurnFinal | None = None) -> str:
+        return build_dynamic_system_prompt(
+            DynamicPromptInput(
+                system_instructions=self.system_prompt,
+                conversation=self._conversation_lines(current_user_turn),
+                latest=self._latest_context(current_user_turn),
+                older_summary=self.summary_text,
+                known_details=self.slots.to_prompt_text(),
+            )
+        )
+
+    def _conversation_lines(self, current_user_turn: UserTurnFinal | None) -> list[ConversationLine]:
+        records: list[tuple[int, int, ConversationLine]] = []
         for index, user in enumerate(self.user_turns):
-            records.append((user.timestamp_ms, index, "user", user.text))
+            records.append((user.timestamp_ms, index, ConversationLine("user", user.text)))
         for index, assistant in enumerate(self.assistant_turns):
             content = assistant_context_text(assistant)
-            records.append((assistant.created_ms, index, "assistant", content))
+            records.append(
+                (
+                    assistant.created_ms,
+                    index,
+                    ConversationLine("assistant", content, interrupted=assistant.interrupted),
+                )
+            )
         if current_user_turn is not None and not self._has_user_turn(current_user_turn.turn_id):
             records.append(
                 (
                     current_user_turn.end_ms or now_ms(),
                     len(records),
-                    "user",
-                    current_user_turn.text,
+                    ConversationLine("user", current_user_turn.text),
                 )
             )
         records.sort(key=lambda item: (item[0], item[1]))
-        return [(role, content) for _, _, role, content in records[-self.max_recent_turns :]]
+        return [line for _, _, line in records[-self.max_recent_turns :] if line.content.strip()]
+
+    def _latest_context(self, current_user_turn: UserTurnFinal | None) -> LatestContext:
+        latest_user = current_user_turn.text if current_user_turn is not None else None
+        if latest_user is None and self.user_turns:
+            latest_user = self.user_turns[-1].text
+
+        latest_agent = self._latest_assistant_with_heard_text()
+        latest_agent_text = assistant_context_text(latest_agent) if latest_agent is not None else None
+        interrupted_text = latest_agent_text if latest_agent is not None and latest_agent.interrupted else None
+
+        return LatestContext(
+            last_agent_message=latest_agent_text,
+            last_user_message=latest_user,
+            interrupted_agent_message=interrupted_text,
+            interruption_user_message=latest_user if interrupted_text else None,
+        )
+
+    def _latest_assistant_with_heard_text(self) -> AssistantTurnRecord | None:
+        for assistant in reversed(self.assistant_turns):
+            if assistant_context_text(assistant):
+                return assistant
+        return None
 
     def _has_user_turn(self, turn_id: int) -> bool:
         return any(turn.turn_id == turn_id for turn in self.user_turns)

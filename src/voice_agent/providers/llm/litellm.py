@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from voice_agent.contracts.capabilities import LLMCapabilities
 from voice_agent.contracts.events import ProviderError
 
 CompletionFactory = Callable[..., Awaitable[Any]]
+_WARMUP_MESSAGES = [{"role": "user", "content": "warmup"}]
 
 
 @dataclass(slots=True)
@@ -249,9 +251,30 @@ class LiteLLM:
 
 
 def _load_litellm_acompletion() -> CompletionFactory:
-    from litellm import acompletion
+    litellm = _load_litellm_module()
 
-    return acompletion
+    return litellm.acompletion
+
+
+def preload_litellm_runtime(settings: Settings) -> None:
+    litellm = _load_litellm_module(settings)
+    for model in {settings.talker_model, settings.listener_model}:
+        if not model or model.startswith("mock"):
+            continue
+        with suppress(Exception):
+            litellm.token_counter(model=model, messages=_WARMUP_MESSAGES)
+
+
+def _load_litellm_module(settings: Settings | None = None) -> Any:
+    settings = settings or get_settings()
+    if settings.litellm_local_model_cost_map:
+        os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    import litellm
+
+    if settings.litellm_disable_hf_tokenizer_download:
+        litellm.disable_hf_tokenizer_download = True
+    return litellm
 
 
 def _with_voice_system_prompt(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

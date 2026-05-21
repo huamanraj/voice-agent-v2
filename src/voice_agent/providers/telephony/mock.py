@@ -24,6 +24,8 @@ class MockTelephony:
         self.started = False
         self.stopped = False
         self.stop_reason: str | None = None
+        self.hangup_reason: str | None = None
+        self.hangup_count = 0
         self.sent_audio: list[AudioFrame] = []
         self.checkpoints: list[str] = []
         self.clear_reasons: list[str] = []
@@ -93,6 +95,11 @@ class MockTelephony:
             if event is None:
                 break
             yield event
+
+    async def hangup(self, reason: str) -> None:
+        self.hangup_count += 1
+        self.hangup_reason = reason
+        await self.stop(reason)
 
     async def stop(self, reason: str) -> None:
         self.stopped = True

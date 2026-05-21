@@ -8,6 +8,10 @@ class VoiceAgentError(Exception):
     """Base exception for expected voice agent failures."""
 
 
+class CallEndedError(VoiceAgentError):
+    """Raised when output is attempted after the caller or provider ended the call."""
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderErrorInfo:
     provider: str

@@ -47,6 +47,10 @@ class TurnDetectionModelsLoader:
             if self.settings.smart_turn_enabled
             else None
         )
+        if vad is not None:
+            vad.warm_up()
+        if smart_turn is not None:
+            smart_turn.warm_up()
         return TurnDetectionModels(vad=vad, smart_turn=smart_turn)
 
 
@@ -67,6 +71,19 @@ class SileroVADModel:
             else None
         )
         self.session = ort.InferenceSession(str(path), sess_options=options, providers=providers)
+
+    def warm_up(self) -> None:
+        np = _import_numpy()
+        chunk = np.zeros((1, SILERO_WINDOW_SAMPLES + SILERO_CONTEXT_SAMPLES), dtype=np.float32)
+        state = np.zeros((2, 1, 128), dtype=np.float32)
+        self.session.run(
+            None,
+            {
+                "input": chunk,
+                "state": state,
+                "sr": np.array(MODEL_SAMPLE_RATE, dtype=np.int64),
+            },
+        )
 
     def create_stream(self, call_id: str, settings: Settings) -> "SileroVADStream":
         return SileroVADStream(
@@ -231,6 +248,19 @@ class SmartTurnV3Model:
         self._np = np
         self._feature_extractor = feature_extractor_cls(chunk_length=SMART_TURN_MAX_SECONDS)
         self._session = ort.InferenceSession(str(path), sess_options=options)
+
+    def warm_up(self) -> None:
+        self.classify(
+            AudioFrame(
+                call_id="warmup",
+                data=b"\x00\x00" * SILERO_WINDOW_SAMPLES,
+                timestamp_ms=0,
+                sample_rate=MODEL_SAMPLE_RATE,
+                codec="pcm16_16k",
+                channels=1,
+                duration_ms=round(SILERO_WINDOW_SAMPLES * 1000 / MODEL_SAMPLE_RATE),
+            )
+        )
 
     def classify(self, frame: AudioFrame) -> SmartTurnDecision:
         if frame.codec != "pcm16_16k" or frame.sample_rate != MODEL_SAMPLE_RATE:

@@ -65,11 +65,17 @@ class Settings(BaseSettings):
     vobiz_stream_ws_path: str = "/ws/vobiz"
     vobiz_stream_auth_token: str | None = None
     vobiz_start_timeout_ms: int = 3000
+    outbound_provider_prewarm_enabled: bool = True
+    outbound_provider_prewarm_ttl_seconds: float = 90.0
+    provider_health_check_seconds: float = 5.0
+    provider_health_timeout_ms: int = 1000
     deepgram_api_key: str | None = None
     sarvam_api_key: str | None = None
     cartesia_api_key: str | None = None
     groq_api_key: str | None = None
     openai_api_key: str | None = None
+    hf_token: str | None = None
+    hf_hub_offline: bool = False
 
     redis_url: str = "redis://localhost:6379/0"
     redis_live_ttl_seconds: int = 21600
@@ -98,6 +104,7 @@ class Settings(BaseSettings):
     queue_error_max: int = 100
     shutdown_grace_seconds: int = 10
     output_gate_wait_timeout_ms: int = 250
+    playback_completion_fallback_grace_ms: int = 750
 
     telephony_codec: str = "mulaw_8k"
     telephony_sample_rate: int = 8000
@@ -128,7 +135,7 @@ class Settings(BaseSettings):
     allow_interrupt_welcome_message: bool = False
 
     talker_model: str = "mock-talker"
-    listener_model: str = "mock-listener"
+    listener_model: str = "openai/gpt-4.1-mini"
     llm_system_prompt: str = (
         "You are a real-time phone voice agent. Reply briefly, naturally, "
         "and with one question at a time. Match the user's language style. "
@@ -141,11 +148,43 @@ class Settings(BaseSettings):
     talker_temperature: float = 0.2
     listener_max_tokens: int = 120
     listener_temperature: float = 0.0
+    litellm_local_model_cost_map: bool = True
+    litellm_disable_hf_tokenizer_download: bool = True
+    end_call_listener_enabled: bool = True
+    end_call_listener_confidence_threshold: float = 0.75
+    end_call_listener_timeout_ms: int = 1500
+    end_call_phrases: tuple[str, ...] = Field(
+        default=(
+            "bye",
+            "bye bye",
+            "byy",
+            "goodbye",
+            "cut call",
+            "call cut",
+            "end call",
+            "hang up",
+            "disconnect",
+            "take care",
+            "all the best",
+            "talk later",
+            "baad mein baat karte",
+            "baay",
+            "call kaat",
+            "kaat do",
+            "alvida",
+            "अलविदा",
+        )
+    )
     llm_first_token_timeout_ms: int = 3000
     llm_total_timeout_ms: int = 15000
     llm_sentence_min_chars: int = 80
     llm_sentence_max_chars: int = 160
     llm_sentence_timeout_ms: int = 500
+    llm_context_max_turns: int = 60
+    empty_transcript_retry_enabled: bool = True
+    empty_transcript_retry_delay_ms: int = 1200
+    empty_transcript_min_audio_ms: int = 700
+    empty_transcript_retry_text: str = "Sorry, audio clear nahi aaya. Zara repeat karenge?"
 
     deepgram_ws_url: str = "wss://api.deepgram.com/v1/listen"
     deepgram_model: str = "nova-3"
@@ -153,6 +192,28 @@ class Settings(BaseSettings):
     deepgram_endpointing_ms: int = 100
     deepgram_utterance_end_ms: int = 1000
     deepgram_keepalive_seconds: int = 3
+
+    sarvam_stt_ws_url: str = "wss://api.sarvam.ai/speech-to-text/ws"
+    sarvam_stt_model: str = "saaras:v3"
+    sarvam_stt_mode: str = "transcribe"
+    sarvam_stt_language_code: str = "unknown"
+    sarvam_stt_sample_rate: int = 8000
+    sarvam_stt_vad_signals: bool = True
+    sarvam_stt_high_vad_sensitivity: bool | None = None
+    sarvam_tts_ws_url: str = "wss://api.sarvam.ai/text-to-speech/ws"
+    sarvam_tts_model: str = "bulbul:v3"
+    sarvam_tts_speaker: str = "simran"
+    sarvam_tts_target_language_code: str = "en-IN"
+    sarvam_tts_speech_sample_rate: int = 8000
+    sarvam_tts_output_audio_codec: str = "linear16"
+    sarvam_tts_output_audio_bitrate: str | None = "128k"
+    sarvam_tts_pace: float = 1.0
+    sarvam_tts_temperature: float = 0.6
+    sarvam_tts_enable_preprocessing: bool = True
+    sarvam_tts_min_buffer_size: int = 50
+    sarvam_tts_max_chunk_length: int = 120
+    sarvam_tts_send_completion_event: bool = True
+    sarvam_tts_keepalive_seconds: int = 20
 
     cartesia_ws_url: str = "wss://api.cartesia.ai/tts/websocket"
     cartesia_version: str = "2026-03-01"

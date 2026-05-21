@@ -39,9 +39,13 @@ def test_context_uses_partial_heard_text_for_interrupted_assistant_turn() -> Non
 
     messages = context.build_llm_messages(user_turn(2, "Actually make it Friday.", end_ms=2000))
 
-    assistant_messages = [message["content"] for message in messages if message["role"] == "assistant"]
-    assert assistant_messages == ["Your appointment is confirmed [interrupted]"]
-    assert "tomorrow at 5 PM" not in assistant_messages[0]
+    assert messages[0]["role"] == "system"
+    prompt = messages[0]["content"]
+    assert len(messages) == 1
+    assert "Agent: Your appointment is confirmed [interrupted]" in prompt
+    assert 'User interrupted with:\n"Actually make it Friday."' in prompt
+    assert "Do not restart the interrupted sentence." in prompt
+    assert "tomorrow at 5 PM" not in prompt
 
 
 def test_unplayed_generated_text_is_not_added_to_llm_history() -> None:
@@ -52,8 +56,10 @@ def test_unplayed_generated_text_is_not_added_to_llm_history() -> None:
 
     messages = context.build_llm_messages(user_turn(2, "Hello?", end_ms=2000))
 
-    assert {"role": "assistant", "content": "This was generated but never played."} not in messages
-    assert messages[-1] == {"role": "user", "content": "Hello?"}
+    prompt = messages[0]["content"]
+    assert "This was generated but never played." not in prompt
+    assert "User: Hello?" in prompt
+    assert 'The user\'s last message: "Hello?"' in prompt
 
 
 def test_context_includes_known_slots_when_set() -> None:
@@ -62,7 +68,7 @@ def test_context_includes_known_slots_when_set() -> None:
 
     messages = context.build_llm_messages(user_turn(1, "What day is it booked for?"))
 
-    assert {"role": "system", "content": "Known call details:\nappointment_date: Friday"} in messages
+    assert "Known call details:\nappointment_date: Friday" in messages[0]["content"]
 
 
 def test_old_context_summary_preserves_heard_text_only() -> None:
@@ -86,8 +92,43 @@ def test_old_context_summary_preserves_heard_text_only() -> None:
     context.start_assistant_turn(message_id="message-2", sequence_id=2)
 
     messages = context.build_llm_messages()
-    summary = next(message["content"] for message in messages if message["content"].startswith("Earlier call context:"))
+    prompt = messages[0]["content"]
 
-    assert "First question." in summary
-    assert "Heard part [interrupted]" in summary
-    assert "hidden tail" not in summary
+    assert "Older call summary:" in prompt
+    assert "First question." in prompt
+    assert "Heard part [interrupted]" in prompt
+    assert "hidden tail" not in prompt
+
+
+def test_context_prompt_combines_history_latest_context_and_call_rules() -> None:
+    context = ContextManager(system_prompt="You are helpful.")
+    context.append_user_turn(user_turn(1, "Hello"))
+    context.start_assistant_turn(message_id="message-1", sequence_id=1)
+    context.update_assistant_from_playback(
+        MessagePlayback(
+            call_id="call-1",
+            message_id="message-1",
+            sequence_id=1,
+            full_text="Hi, how can I help?",
+            audio_ms_sent=1000,
+            started_ms=1000,
+            fully_played_ms=2000,
+        )
+    )
+
+    messages = context.build_llm_messages(user_turn(2, "I need car insurance.", end_ms=3000))
+    prompt = messages[0]["content"]
+
+    assert messages == [{"role": "system", "content": prompt}]
+    assert "# SYSTEM INSTRUCTIONS\nYou are helpful." in prompt
+    assert "# CONVERSATION HISTORY" in prompt
+    assert "User: Hello" in prompt
+    assert "Agent: Hi, how can I help?" in prompt
+    assert "User: I need car insurance." in prompt
+    assert "# LATEST CONTEXT" in prompt
+    assert 'The last thing you said: "Hi, how can I help?"' in prompt
+    assert 'The user\'s last message: "I need car insurance."' in prompt
+    assert "# COVERAGE CHECKLIST" in prompt
+    assert "# WHEN TO END CALL" in prompt
+    assert "# CLOSING LINE" in prompt
+    assert "# GOODBYE RULES" in prompt

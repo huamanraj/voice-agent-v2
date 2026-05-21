@@ -150,6 +150,38 @@ def test_deepgram_results_emit_transcript_events() -> None:
     asyncio.run(scenario())
 
 
+def test_deepgram_final_empty_results_emit_empty_transcript_event() -> None:
+    async def scenario() -> None:
+        websocket = FakeDeepgramWebSocket()
+        stt = DeepgramSTT(
+            settings=deepgram_settings(),
+            websocket_factory=lambda url, headers: async_value(websocket),
+            keepalive_seconds=99,
+        )
+
+        await stt.start("call-dg", language_hint="multi")
+        await websocket.feed_json(
+            {
+                "type": "Results",
+                "start": 1.25,
+                "duration": 0.75,
+                "is_final": True,
+                "speech_final": True,
+                "channel": {"alternatives": [{"transcript": "", "confidence": 0.0}]},
+            }
+        )
+        transcript = await asyncio.wait_for(anext(stt.transcripts()), 0.2)
+
+        assert transcript.call_id == "call-dg"
+        assert transcript.text == ""
+        assert transcript.is_final
+        assert transcript.start_ms == 1250
+        assert transcript.end_ms == 2000
+        await stt.stop()
+
+    asyncio.run(scenario())
+
+
 def test_deepgram_speech_started_and_utterance_end_emit_speech_events() -> None:
     async def scenario() -> None:
         websocket = FakeDeepgramWebSocket()

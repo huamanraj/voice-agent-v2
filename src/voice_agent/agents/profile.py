@@ -36,6 +36,9 @@ class AgentSTT:
     deepgram_model: str | None = None
     deepgram_endpointing_ms: int | None = None
     deepgram_utterance_end_ms: int | None = None
+    sarvam_model: str | None = None
+    sarvam_mode: str | None = None
+    sarvam_high_vad_sensitivity: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +48,7 @@ class AgentTTS:
     cartesia_voice_id: str | None = None
     cartesia_model: str | None = None
     cartesia_max_buffer_delay_ms: int | None = None
+    sarvam_model: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +105,7 @@ def fallback_profile(settings: Settings, agent_id: str | None = None) -> AgentPr
             language=settings.agent_tts_language or settings.agent_default_language,
             cartesia_voice_id=settings.cartesia_voice_id,
             cartesia_model=settings.cartesia_model,
+            sarvam_model=settings.sarvam_tts_model,
         ),
         stt=AgentSTT(language=settings.deepgram_language, deepgram_model=settings.deepgram_model),
         llm=AgentLLM(
@@ -147,11 +152,18 @@ def apply_agent_profile(settings: Settings, profile: AgentProfile) -> Settings:
     _put(updates, "deepgram_model", profile.stt.deepgram_model)
     _put(updates, "deepgram_endpointing_ms", profile.stt.deepgram_endpointing_ms)
     _put(updates, "deepgram_utterance_end_ms", profile.stt.deepgram_utterance_end_ms)
+    _put(updates, "sarvam_stt_language_code", profile.stt.language)
+    _put(updates, "sarvam_stt_model", profile.stt.sarvam_model)
+    _put(updates, "sarvam_stt_mode", profile.stt.sarvam_mode)
+    _put(updates, "sarvam_stt_high_vad_sensitivity", profile.stt.sarvam_high_vad_sensitivity)
 
     _put(updates, "cartesia_voice_id", profile.tts.cartesia_voice_id)
     _put(updates, "cartesia_model", profile.tts.cartesia_model)
     _put(updates, "cartesia_language", profile.tts.language)
     _put(updates, "cartesia_max_buffer_delay_ms", profile.tts.cartesia_max_buffer_delay_ms)
+    _put(updates, "sarvam_tts_model", profile.tts.sarvam_model)
+    _put(updates, "sarvam_tts_target_language_code", profile.tts.language)
+    _put(updates, "sarvam_tts_speaker", profile.tts.voice)
 
     _put(updates, "interruption_enabled", profile.behavior.interruption_enabled)
     _put(updates, "min_interrupt_words", profile.behavior.min_interrupt_words)
@@ -197,6 +209,9 @@ def _stt_from_mapping(payload: dict[str, Any]) -> AgentSTT:
         deepgram_model=_optional_string(payload.get("deepgram_model")),
         deepgram_endpointing_ms=_optional_int(payload.get("deepgram_endpointing_ms")),
         deepgram_utterance_end_ms=_optional_int(payload.get("deepgram_utterance_end_ms")),
+        sarvam_model=_optional_string(payload.get("sarvam_model")),
+        sarvam_mode=_optional_string(payload.get("sarvam_mode")),
+        sarvam_high_vad_sensitivity=_optional_bool(payload.get("sarvam_high_vad_sensitivity")),
     )
 
 
@@ -207,6 +222,7 @@ def _tts_from_mapping(payload: dict[str, Any]) -> AgentTTS:
         cartesia_voice_id=_optional_string(payload.get("cartesia_voice_id")),
         cartesia_model=_optional_string(payload.get("cartesia_model")),
         cartesia_max_buffer_delay_ms=_optional_int(payload.get("cartesia_max_buffer_delay_ms")),
+        sarvam_model=_optional_string(payload.get("sarvam_model")),
     )
 
 

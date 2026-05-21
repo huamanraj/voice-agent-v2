@@ -13,9 +13,9 @@ from voice_agent.contracts.packets import now_ms
 from voice_agent.factory.provider_registry import create_default_registry
 from voice_agent.providers.llm import LiteLLM, MockLLM
 from voice_agent.providers.storage import MemoryStore
-from voice_agent.providers.stt import DeepgramSTT, MockSTT
+from voice_agent.providers.stt import DeepgramSTT, MockSTT, SarvamSTT
 from voice_agent.providers.telephony import MockTelephony
-from voice_agent.providers.tts import CartesiaTTS, MockTTS
+from voice_agent.providers.tts import CartesiaTTS, MockTTS, SarvamTTS
 
 
 def test_mock_providers_satisfy_runtime_ports() -> None:
@@ -34,12 +34,14 @@ def test_default_registry_creates_mock_providers() -> None:
 
     assert registry.available("telephony") == ("mock", "vobiz")
     assert isinstance(registry.create("telephony", "mock", call_id="call-1"), MockTelephony)
-    assert registry.available("stt") == ("deepgram", "mock")
+    assert registry.available("stt") == ("deepgram", "mock", "sarvam")
     assert isinstance(registry.create("stt", "deepgram"), DeepgramSTT)
     assert isinstance(registry.create("stt", "mock"), MockSTT)
-    assert registry.available("tts") == ("cartesia", "mock")
+    assert isinstance(registry.create("stt", "sarvam"), SarvamSTT)
+    assert registry.available("tts") == ("cartesia", "mock", "sarvam")
     assert isinstance(registry.create("tts", "cartesia"), CartesiaTTS)
     assert isinstance(registry.create("tts", "mock"), MockTTS)
+    assert isinstance(registry.create("tts", "sarvam"), SarvamTTS)
     assert registry.available("llm") == ("litellm", "mock")
     assert isinstance(registry.create("llm", "litellm"), LiteLLM)
     assert isinstance(registry.create("llm", "mock"), MockLLM)

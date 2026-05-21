@@ -141,6 +141,25 @@ def test_short_noise_stays_pending_not_confirmed() -> None:
     asyncio.run(scenario())
 
 
+def test_long_single_word_does_not_interrupt_below_min_words() -> None:
+    async def scenario() -> None:
+        settings = Settings(min_interrupt_words=2, hard_interrupt_after_audio_ms=350)
+        manager, sequence_manager, output_gate, telephony, tts, llm = build_manager(settings)
+
+        await manager.handle_speech_start(SpeechStart("call-interrupt", 1000, "vad", 0.9))
+        decision = await manager.handle_transcript(final_transcript("hello", end_ms=1500))
+
+        assert decision.outcome == InterruptionOutcome.PENDING
+        assert decision.reason == "not_enough_words"
+        assert sequence_manager.is_valid(1)
+        assert output_gate.state == OutputGateState.WAIT
+        assert telephony.clear_reasons == []
+        assert tts.cancelled_message_ids == set()
+        assert llm.cancelled_response_ids == set()
+
+    asyncio.run(scenario())
+
+
 def test_speech_stop_releases_candidate_without_cancel_or_clear() -> None:
     async def scenario() -> None:
         manager, sequence_manager, output_gate, telephony, tts, llm = build_manager()

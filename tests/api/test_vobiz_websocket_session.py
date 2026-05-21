@@ -8,6 +8,7 @@ from voice_agent.contracts.audio import AudioFrame
 from voice_agent.contracts.capabilities import STTCapabilities
 from voice_agent.contracts.events import SpeechStart, SpeechStop, TranscriptEvent
 from voice_agent.contracts.packets import now_ms
+from voice_agent.core.provider_warmup import ProviderWarmupPool
 from voice_agent.factory.provider_registry import ProviderRegistry
 from voice_agent.providers.llm import MockLLM
 from voice_agent.providers.storage import MemoryStore
@@ -124,6 +125,8 @@ def test_vobiz_websocket_session_runs_user_turn_to_play_audio() -> None:
             llm_provider="mock",
             live_store_provider="memory",
             final_store_provider="memory",
+            agent_config_path="missing-agent-test-file.json",
+            default_agent_id="fallback",
             min_user_speech_ms=0,
             min_silence_for_turn_end_ms=0,
             smart_turn_enabled=False,
@@ -152,6 +155,54 @@ def test_vobiz_websocket_session_runs_user_turn_to_play_audio() -> None:
     asyncio.run(scenario())
 
 
+def test_vobiz_websocket_session_claims_prewarmed_provider_bundle() -> None:
+    async def scenario() -> None:
+        websocket = FakeVobizWebSocket()
+        created_stt: list[TranscriptOnAudioSTT] = []
+        registry = build_registry(created_stt=created_stt)
+        settings = Settings(
+            telephony_provider="vobiz",
+            stt_provider="mock",
+            tts_provider="mock",
+            llm_provider="mock",
+            live_store_provider="memory",
+            final_store_provider="memory",
+            agent_config_path="missing-agent-test-file.json",
+            default_agent_id="fallback",
+            min_user_speech_ms=0,
+            min_silence_for_turn_end_ms=0,
+            smart_turn_enabled=False,
+            llm_sentence_timeout_ms=1,
+            vobiz_start_timeout_ms=500,
+            vobiz_stream_auth_token=None,
+        )
+        pool = ProviderWarmupPool(settings, registry)
+        await pool.prewarm("prewarm-1")
+
+        session_task = asyncio.create_task(
+            run_vobiz_websocket_session(
+                websocket,
+                settings=settings,
+                registry=registry,
+                prewarm_id="prewarm-1",
+                provider_warmup_pool=pool,
+            )
+        )
+        await websocket.feed_json(start_packet())
+        await websocket.feed_json(media_packet())
+        await wait_until(lambda: any(packet.get("event") == "playAudio" for packet in sent_packets(websocket)))
+        await websocket.feed_json({"event": "stop"})
+
+        stats = await asyncio.wait_for(session_task, timeout=2)
+
+        assert stats.user_turns_finalized == 1
+        assert len(created_stt) == 1
+        assert created_stt[0].call_id == "call-123"
+        assert await pool.claim(prewarm_id="prewarm-1") is None
+
+    asyncio.run(scenario())
+
+
 def test_vobiz_websocket_session_times_out_without_start_event() -> None:
     async def scenario() -> None:
         websocket = FakeVobizWebSocket()
@@ -170,6 +221,43 @@ def test_vobiz_websocket_session_times_out_without_start_event() -> None:
     asyncio.run(scenario())
 
 
+def test_vobiz_websocket_session_cleans_up_on_server_cancellation() -> None:
+    async def scenario() -> None:
+        websocket = FakeVobizWebSocket()
+        registry = build_registry()
+        settings = Settings(
+            telephony_provider="vobiz",
+            stt_provider="mock",
+            tts_provider="mock",
+            llm_provider="mock",
+            live_store_provider="memory",
+            final_store_provider="memory",
+            agent_config_path="missing-agent-test-file.json",
+            default_agent_id="fallback",
+            vobiz_start_timeout_ms=500,
+            vobiz_stream_auth_token=None,
+        )
+
+        session_task = asyncio.create_task(
+            run_vobiz_websocket_session(websocket, settings=settings, registry=registry)
+        )
+        await websocket.feed_json(start_packet())
+        await wait_until(lambda: websocket.incoming.qsize() == 0)
+
+        session_task.cancel()
+        try:
+            await session_task
+        except asyncio.CancelledError:
+            pass
+        else:
+            raise AssertionError("server cancellation should propagate to the caller")
+
+        assert websocket.closed
+        assert any(packet.get("event") == "stop" for packet in sent_packets(websocket))
+
+    asyncio.run(scenario())
+
+
 def test_vobiz_query_token_satisfies_stream_auth() -> None:
     settings = Settings(vobiz_stream_auth_token="expected-token")
 
@@ -181,15 +269,22 @@ def test_vobiz_query_token_satisfies_stream_auth() -> None:
     )
 
 
-def build_registry() -> ProviderRegistry:
+def build_registry(created_stt: list[TranscriptOnAudioSTT] | None = None) -> ProviderRegistry:
     registry = ProviderRegistry()
     registry.register("telephony", "vobiz", VobizTelephony)
-    registry.register("stt", "mock", lambda: TranscriptOnAudioSTT("I need help with my policy"))
+    registry.register("stt", "mock", lambda: create_transcript_stt(created_stt))
     registry.register("tts", "mock", lambda: MockTTS(chunk_words=3))
     registry.register("llm", "mock", lambda: MockLLM(responses=["Sure, I can help with that."]))
     registry.register("live_store", "memory", MemoryStore)
     registry.register("final_store", "memory", MemoryStore)
     return registry
+
+
+def create_transcript_stt(created_stt: list[TranscriptOnAudioSTT] | None) -> TranscriptOnAudioSTT:
+    stt = TranscriptOnAudioSTT("I need help with my policy")
+    if created_stt is not None:
+        created_stt.append(stt)
+    return stt
 
 
 def start_packet() -> dict[str, Any]:

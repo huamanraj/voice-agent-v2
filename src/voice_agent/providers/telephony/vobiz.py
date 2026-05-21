@@ -3,7 +3,7 @@
 import asyncio
 import base64
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from typing import Any, Protocol
 
@@ -11,6 +11,7 @@ from voice_agent.audio.chunker import chunk_audio_frame
 from voice_agent.audio.converter import convert_audio_frame, duration_ms_for_bytes
 from voice_agent.contracts.audio import AudioCodec, AudioFrame
 from voice_agent.contracts.capabilities import TelephonyCapabilities
+from voice_agent.contracts.errors import CallEndedError
 from voice_agent.contracts.events import PlaybackEvent, ProviderError
 from voice_agent.contracts.packets import now_ms
 
@@ -37,6 +38,7 @@ class VobizTelephony:
         *,
         call_id: str | None = None,
         auth_token: str | None = None,
+        hangup_call: Callable[[str], Awaitable[Any]] | None = None,
         clear_timeout_seconds: float = 0.5,
         queue_maxsize: int = 200,
     ) -> None:
@@ -44,6 +46,7 @@ class VobizTelephony:
         self.call_id = call_id or "unknown"
         self.stream_id: str | None = None
         self.auth_token = auth_token
+        self._hangup_call = hangup_call
         self.clear_timeout_seconds = clear_timeout_seconds
         self.started = False
         self.stopped = False
@@ -82,9 +85,11 @@ class VobizTelephony:
             yield frame
 
     async def send_audio(self, frame: AudioFrame) -> None:
+        self._raise_if_finished("send_audio")
         outbound = convert_audio_frame(frame, self._media_codec)
         content_type = _content_type_for_codec(outbound.codec)
         for chunk in chunk_audio_frame(outbound, chunk_ms=20, pad_final=False):
+            self._raise_if_finished("send_audio")
             payload = base64.b64encode(_wire_audio_bytes(chunk.data, outbound.codec)).decode("ascii")
             await self._send_json(
                 {
@@ -98,6 +103,7 @@ class VobizTelephony:
             )
 
     async def clear_playback(self, reason: str) -> None:
+        self._raise_if_finished("clear_playback")
         if self.stream_id is None:
             self._record_error(
                 "missing_stream_id",
@@ -111,6 +117,7 @@ class VobizTelephony:
             await asyncio.wait_for(self._clear_ack_event.wait(), self.clear_timeout_seconds)
 
     async def send_checkpoint(self, checkpoint_id: str) -> None:
+        self._raise_if_finished("send_checkpoint")
         if self.stream_id is None:
             self._record_error(
                 "missing_stream_id",
@@ -128,6 +135,21 @@ class VobizTelephony:
             if event is None:
                 break
             yield event
+
+    async def hangup(self, reason: str) -> None:
+        if self.stopped:
+            return
+        if self._hangup_call is not None and self.call_id != "unknown":
+            try:
+                await self._hangup_call(self.call_id)
+            except Exception as exc:
+                self._record_error(
+                    "hangup_failed",
+                    str(exc),
+                    retryable=True,
+                    details={"exception": exc.__class__.__name__},
+                )
+        await self.stop(reason)
 
     async def stop(self, reason: str) -> None:
         self.stop_reason = reason
@@ -354,9 +376,19 @@ class VobizTelephony:
         )
 
     async def _send_json(self, payload: dict[str, Any]) -> None:
+        self._raise_if_finished(str(payload.get("event") or "send"))
         try:
             await self._send_text(json.dumps(payload, separators=(",", ":")))
         except Exception as exc:
+            if self._finished or self.stopped or _is_closed_socket_error(exc):
+                await self._finish_stream("send_after_stop")
+                self._record_error(
+                    "send_after_stop",
+                    str(exc),
+                    retryable=False,
+                    details={"event": payload.get("event"), "exception": exc.__class__.__name__},
+                )
+                raise CallEndedError("Vobiz stream closed while sending output.") from exc
             self._record_error(
                 "send_failed",
                 str(exc),
@@ -433,6 +465,12 @@ class VobizTelephony:
                 details=details or {},
             )
         )
+
+    def _raise_if_finished(self, operation: str) -> None:
+        if self._finished or self.stopped:
+            raise CallEndedError(
+                f"Cannot {operation}: Vobiz stream already ended ({self.stop_reason or 'closed'})."
+            )
 
 
 def _codec_from_media_format(media_format: dict[str, Any]) -> tuple[AudioCodec, int, str]:
@@ -525,3 +563,19 @@ def _put_terminal(queue: asyncio.Queue[Any]) -> None:
             queue.get_nowait()
         with suppress(asyncio.QueueFull):
             queue.put_nowait(None)
+
+
+def _is_closed_socket_error(exc: Exception) -> bool:
+    text = f"{exc.__class__.__name__}: {exc}".casefold()
+    return any(
+        marker in text
+        for marker in (
+            "websocketdisconnect",
+            "websocket disconnect",
+            "websocket is not connected",
+            "connection closed",
+            "already closed",
+            "close message",
+            "cannot call \"send\" once a close message has been sent",
+        )
+    )

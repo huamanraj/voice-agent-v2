@@ -106,11 +106,29 @@ def test_turn_manager_uses_vad_stop_when_smart_turn_disabled() -> None:
     assert turn.text == "I want policy details"
 
 
+def test_turn_manager_uses_end_signal_when_smart_turn_model_unavailable() -> None:
+    settings = Settings(
+        smart_turn_enabled=True,
+        min_user_speech_ms=100,
+        min_silence_for_turn_end_ms=250,
+    )
+    manager = TurnManager("call-turn", settings, smart_turn_available=False)
+
+    manager.handle_speech_start(SpeechStart("call-turn", 1000, "vad", 0.9))
+    manager.handle_transcript(transcript("I want policy details", start_ms=1000, end_ms=1400))
+    manager.handle_speech_stop(SpeechStop("call-turn", 1400, "vad", 0.9))
+    turn = manager.emit_turn(timestamp_ms=1700)
+
+    assert turn is not None
+    assert turn.text == "I want policy details"
+
+
 def test_turn_manager_requires_explicit_smart_turn_result() -> None:
     settings = Settings(
         min_user_speech_ms=100,
         min_silence_for_turn_end_ms=250,
         smart_turn_threshold=0.65,
+        end_of_turn_grace_ms=0,
     )
     manager = TurnManager("call-turn", settings)
 
@@ -145,6 +163,7 @@ def test_turn_manager_waits_for_final_after_vad_smart_turn() -> None:
         min_silence_for_turn_end_ms=250,
         max_silence_before_force_end_ms=1000,
         smart_turn_threshold=0.65,
+        end_of_turn_grace_ms=0,
     )
     manager = TurnManager("call-turn", settings)
 
@@ -182,6 +201,7 @@ def test_turn_manager_ignores_late_duplicate_transcript_after_emit() -> None:
         min_user_speech_ms=100,
         min_silence_for_turn_end_ms=250,
         max_silence_before_force_end_ms=1000,
+        end_of_turn_grace_ms=0,
     )
     manager = TurnManager("call-turn", settings)
 
@@ -203,3 +223,106 @@ def test_turn_manager_ignores_late_duplicate_transcript_after_emit() -> None:
     manager.handle_transcript(transcript("Hello.", start_ms=1000, end_ms=1500), received_ms=1600)
 
     assert manager.emit_turn(timestamp_ms=1600) is None
+
+
+def test_turn_manager_waits_for_final_when_interim_tail_extends_final_text() -> None:
+    settings = Settings(
+        min_user_speech_ms=100,
+        min_silence_for_turn_end_ms=250,
+        max_silence_before_force_end_ms=1200,
+        end_of_turn_grace_ms=0,
+    )
+    manager = TurnManager("call-turn", settings)
+
+    manager.handle_speech_start(SpeechStart("call-turn", 1000, "vad", 0.9))
+    manager.handle_transcript(
+        transcript(
+            "I think कि I am trying to solve the issue where हिंदी",
+            start_ms=1000,
+            end_ms=1600,
+        ),
+        received_ms=1600,
+    )
+    manager.handle_transcript(
+        transcript(
+            "is not supported by you. So can you please",
+            is_final=False,
+            start_ms=1600,
+            end_ms=2100,
+        ),
+        received_ms=2100,
+    )
+    manager.handle_speech_stop(SpeechStop("call-turn", 2200, "vad", 0.95))
+    manager.handle_smart_turn(
+        SmartTurnResult(
+            call_id="call-turn",
+            turn_id=1,
+            is_complete=True,
+            confidence=0.95,
+            reason="smart_turn_v3_onnx",
+        )
+    )
+
+    decision = manager.evaluate(timestamp_ms=2500)
+    assert not decision.should_emit
+    assert decision.reason == "waiting_for_final_transcript"
+
+    manager.handle_transcript(
+        transcript(
+            "is not supported by you. So can you please speak in हिंदी?",
+            start_ms=1600,
+            end_ms=2600,
+        ),
+        received_ms=2600,
+    )
+    turn = manager.emit_turn(timestamp_ms=2600)
+
+    assert turn is not None
+    assert (
+        turn.text
+        == "I think कि I am trying to solve the issue where हिंदी "
+        "is not supported by you. So can you please speak in हिंदी?"
+    )
+
+
+def test_turn_manager_holds_completed_smart_turn_during_grace_window() -> None:
+    settings = Settings(
+        min_user_speech_ms=100,
+        min_silence_for_turn_end_ms=250,
+        end_of_turn_grace_ms=250,
+    )
+    manager = TurnManager("call-turn", settings)
+
+    manager.handle_speech_start(SpeechStart("call-turn", 1000, "vad", 0.9))
+    manager.handle_transcript(transcript("Tell me how cow is", start_ms=1000, end_ms=1800))
+    manager.handle_speech_stop(SpeechStop("call-turn", 2200, "vad", 0.95))
+    manager.handle_smart_turn(
+        SmartTurnResult(
+            call_id="call-turn",
+            turn_id=1,
+            is_complete=True,
+            confidence=0.95,
+            reason="smart_turn_v3_onnx",
+        )
+    )
+
+    assert manager.state.smart_turn_ms is not None
+    decision = manager.evaluate(timestamp_ms=manager.state.smart_turn_ms + 100)
+    assert not decision.should_emit
+    assert decision.reason == "end_of_turn_grace"
+
+    turn = manager.emit_turn(timestamp_ms=manager.state.smart_turn_ms + 250)
+    assert turn is not None
+    assert turn.text == "Tell me how cow is"
+
+
+def test_turn_manager_preserves_turn_start_across_vad_splits() -> None:
+    settings = Settings()
+    manager = TurnManager("call-turn", settings)
+
+    manager.handle_speech_start(SpeechStart("call-turn", 1000, "vad", 0.9))
+    manager.handle_transcript(transcript("I think कि", start_ms=1000, end_ms=1300))
+    manager.handle_speech_stop(SpeechStop("call-turn", 1400, "vad", 0.95))
+    manager.handle_speech_start(SpeechStart("call-turn", 1700, "vad", 0.9))
+
+    assert manager.state.user_started_ms == 1000

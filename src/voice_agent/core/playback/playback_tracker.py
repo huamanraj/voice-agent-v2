@@ -19,6 +19,8 @@ class MessagePlayback:
     audio_ms_sent: int = 0
     checkpoints_sent: list[str] = field(default_factory=list)
     checkpoints_played: list[str] = field(default_factory=list)
+    checkpoint_sent_ms: dict[str, int] = field(default_factory=dict)
+    checkpoint_ack_latency_ms: list[int] = field(default_factory=list)
     cleared: bool = False
     interrupted: bool = False
     started_ms: int | None = None
@@ -98,11 +100,18 @@ class PlaybackTracker:
             playback.word_timestamps = word_timestamps
         return playback
 
-    def mark_checkpoint_sent(self, message_id: str, checkpoint_id: str) -> None:
+    def mark_checkpoint_sent(
+        self,
+        message_id: str,
+        checkpoint_id: str,
+        *,
+        timestamp_ms: int | None = None,
+    ) -> None:
         playback = self.messages.get(message_id)
         if playback is None:
             return
         playback.checkpoints_sent.append(checkpoint_id)
+        playback.checkpoint_sent_ms[checkpoint_id] = timestamp_ms or now_ms()
         self.checkpoint_to_message_id[checkpoint_id] = message_id
 
     def handle_playback_event(self, event: PlaybackEvent) -> MessagePlayback | None:
@@ -116,6 +125,9 @@ class PlaybackTracker:
             checkpoint_id = event.checkpoint_id or event.message_id
             if checkpoint_id:
                 playback.checkpoints_played.append(checkpoint_id)
+                sent_ms = playback.checkpoint_sent_ms.get(checkpoint_id)
+                if sent_ms is not None:
+                    playback.checkpoint_ack_latency_ms.append(max(0, event.ts_ms - sent_ms))
             playback.fully_played_ms = event.ts_ms
             playback.interrupted = False
             return playback
@@ -141,6 +153,20 @@ class PlaybackTracker:
         playback.interrupted = True
         playback.cleared = True
         playback.interrupted_ms = event.ts_ms
+        return playback
+
+    def mark_estimated_fully_played(
+        self,
+        message_id: str,
+        *,
+        timestamp_ms: int | None = None,
+    ) -> MessagePlayback | None:
+        playback = self.messages.get(message_id)
+        if playback is None or playback.interrupted or playback.fully_played_ms is not None:
+            return None
+        if not playback.checkpoints_sent or playback.started_ms is None or playback.audio_ms_sent <= 0:
+            return None
+        playback.fully_played_ms = timestamp_ms or now_ms()
         return playback
 
     def heard_text(self, message_id: str) -> str:
